@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gst/gst.h>
+#include <memory>
 #include "VideoSource.hpp"
 
 struct VideoCaps
@@ -14,16 +16,23 @@ struct VideoCaps
 class VideoPipeline
 {
 public:
-    void setVideoSource(VideoSource *source);
-    void setupPipeline();
-    void startPipeline();
-    void pausePipeline();
-    void stopPipeline();
-    void seekPipeline(gint64 position);
-    void setCapsProperty(gchar *format, gint width, gint height, gint fps_num, gint fps_denom);
+    VideoPipeline() = default;
+    ~VideoPipeline();
+
+    bool setVideoSource(std::unique_ptr<VideoSource> source);
+    bool setupPipeline();
+    bool playPipeline();
+    bool pausePipeline();
+    bool seekPipeline(gint64 position);
+    bool setCapsProperty(const VideoCaps& caps);
+    gint64 getCurrentPosition() const;
+    gint64 getDuration() const;
 
 private:
-    VideoSource *m_source{nullptr};
-    GstElement *m_pipeline{nullptr}, *m_videoConvert{nullptr}, *m_videoCaps{nullptr}, *m_videoSink{nullptr};
+    std::unique_ptr<VideoSource> m_source{nullptr};
+    GstElement *m_pipeline{nullptr};
+    GstElement *m_videoConvert{nullptr};
+    GstElement *m_videoCaps{nullptr};
+    GstElement *m_videoSink{nullptr};
     VideoCaps m_caps;
 };
