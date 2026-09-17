@@ -35,4 +35,7 @@ private:
     GstElement *m_videoCaps{nullptr};
     GstElement *m_videoSink{nullptr};
     VideoCaps m_caps;
+
+    bool isPipelineSetup() const;
+    bool isPipelineInState(std::initializer_list<GstState> states) const;
 };

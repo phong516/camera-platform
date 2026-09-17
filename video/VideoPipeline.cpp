@@ -1,4 +1,5 @@
 #include "VideoPipeline.hpp"
+#include <initializer_list>
 
 VideoPipeline::~VideoPipeline()
 {
@@ -38,7 +39,7 @@ bool VideoPipeline::setupPipeline()
     m_videoCaps = gst_element_factory_make("capsfilter", "video-caps");
     m_videoSink = gst_element_factory_make("autovideosink", "video-sink");
 
-    if (!m_pipeline || !m_videoConvert || !m_videoCaps || !m_videoSink)
+    if (!isPipelineSetup())
     {
         g_critical("Failed to create GStreamer elements\n");
         return false;
@@ -67,7 +68,7 @@ bool VideoPipeline::setupPipeline()
 
 bool VideoPipeline::playPipeline()
 {
-    if (!m_pipeline || !m_source || !m_videoConvert || !m_videoCaps || !m_videoSink)
+    if (!isPipelineSetup())
     {
         g_critical("Please setup pipeline first\n") ;
         return false;
@@ -94,7 +95,7 @@ bool VideoPipeline::playPipeline()
 
 bool VideoPipeline::pausePipeline()
 {
-    if (!m_pipeline || !m_source || !m_videoConvert || !m_videoCaps || !m_videoSink)
+    if (!isPipelineSetup())
     {
         g_critical("Please setup pipeline first\n") ;
         return false;
@@ -116,11 +117,35 @@ bool VideoPipeline::pausePipeline()
             return false;
         }
     }
+    else
+    {
+        g_warning("Pipeline is not in PLAYING state, cannot pause\n");
+        return false;
+    }
     return true;
 }
 
 bool VideoPipeline::seekPipeline(gint64 position)
 {
+    if (!isPipelineSetup())
+    {
+        g_critical("Please setup pipeline first\n") ;
+        return false;
+    }
+
+    GstState state{}, pending{};
+    GstStateChangeReturn ret = gst_element_get_state(m_pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
+    if (ret == GST_STATE_CHANGE_FAILURE) 
+    {
+        g_warning("Failed to get state\n");
+        return false;
+    }
+    if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED)
+    {
+        g_warning("Pipeline is not in PLAYING or PAUSED state, cannot seek\n");
+        return false;
+    }
+
     return false;
 }
 
@@ -128,4 +153,73 @@ bool VideoPipeline::setCapsProperty(const VideoCaps& caps)
 {
     m_caps = caps;
     return true;
+}
+
+gint64 VideoPipeline::getCurrentPosition() const
+{
+    if (!isPipelineSetup())
+    {
+        g_critical("Please setup pipeline first\n") ;
+        return -1;
+    }
+    GstState state{}, pending{};
+    GstStateChangeReturn ret = gst_element_get_state(m_pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
+    if (ret == GST_STATE_CHANGE_FAILURE)
+    {
+        g_warning("Failed to get state\n");
+        return -1;
+    }
+    if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED)
+    {
+        g_warning("Pipeline is not in PLAYING or PAUSED state, cannot query duration\n");
+        return -1;
+    }
+    gint64 duration = gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &duration) ? duration : -1;
+    return duration;
+}
+
+gint64 VideoPipeline::getDuration() const
+{
+    if (!isPipelineSetup())
+    {
+        g_critical("Please setup pipeline first\n") ;
+        return -1;
+    }
+    GstState state{}, pending{};
+    GstStateChangeReturn ret = gst_element_get_state(m_pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
+    if (ret == GST_STATE_CHANGE_FAILURE)
+    {
+        g_warning("Failed to get state\n");
+        return -1;
+    }
+    if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED)
+    {
+        g_warning("Pipeline is not in PLAYING or PAUSED state, cannot query duration\n");
+        return -1;
+    }
+    gint64 duration = gst_element_query_duration(m_pipeline, GST_FORMAT_TIME, &duration) ? duration : -1;
+    return duration;
+}
+
+bool VideoPipeline::isPipelineSetup() const
+{
+    return m_pipeline && m_source && m_videoConvert && m_videoCaps && m_videoSink;
+}
+
+
+bool VideoPipeline::isPipelineInState(GstState state, std::initializer_list<GstState> states) const
+{
+    if (!isPipelineSetup())
+    {
+        g_critical("Please setup pipeline first\n") ;
+        return false;
+    }
+    GstState currentState{}, pending{};
+    GstStateChangeReturn ret = gst_element_get_state(m_pipeline, &currentState, &pending, GST_CLOCK_TIME_NONE);
+    if (ret == GST_STATE_CHANGE_FAILURE)
+    {
+        g_warning("Failed to get state\n");
+        return false;
+    }
+    return currentState == state;
 }
