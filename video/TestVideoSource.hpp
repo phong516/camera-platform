@@ -5,12 +5,10 @@
 class TestVideoSource : public VideoSource
 {
 public:
-    GstElement *m_source{nullptr};
+    TestVideoSource() = default;
+    ~TestVideoSource() override = default;
 
-    TestVideoSource();
-    ~TestVideoSource() override;
-
-    GstElement *getGstVideoSource() override;
+    GstElement *createElement() override;
 
 private:
     GstElement *m_source{nullptr};

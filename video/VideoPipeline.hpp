@@ -24,12 +24,14 @@ public:
     bool playPipeline();
     bool pausePipeline();
     bool seekPipeline(gint64 position);
-    bool setCapsProperty(const VideoCaps& caps);
+    bool setCapsProperty(const VideoCaps &caps);
     gint64 getCurrentPosition() const;
     gint64 getDuration() const;
 
 private:
-    std::unique_ptr<VideoSource> m_source{nullptr};
+    std::unique_ptr<VideoSource> m_videoSource{nullptr};
+
+    GstElement *m_source{nullptr};
     GstElement *m_pipeline{nullptr};
     GstElement *m_videoConvert{nullptr};
     GstElement *m_videoCaps{nullptr};
@@ -37,5 +39,8 @@ private:
     VideoCaps m_caps;
 
     bool isPipelineSetup() const;
-    bool isPipelineInState(std::initializer_list<GstState> states) const;
+    template <typename... T>
+    bool isPipelineInState(T... state) const;
+    bool cleanup();
+    bool cleanupSubElements();
 };

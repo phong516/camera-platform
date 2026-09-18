@@ -5,10 +5,10 @@
 class CameraVideoSource : public VideoSource
 {
 public:
-    CameraVideoSource();
-    ~CameraVideoSource() override;
+    CameraVideoSource() = default;
+    ~CameraVideoSource() override = default;
 
-    GstElement *getGstVideoSource() override;
+    GstElement *createElement() override;
 
 private:
     GstElement *m_source{nullptr};
