@@ -123,7 +123,7 @@ bool VideoPipeline::seekPipeline(gint64 position)
         return false;
     }
 
-    return gst_element_seek_simple(m_pipeline, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, position);
+    return gst_element_seek_simple(m_pipeline, GST_FORMAT_TIME, static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), position);
 }
 
 bool VideoPipeline::setCapsProperty(const VideoCaps &caps)
@@ -144,7 +144,8 @@ gint64 VideoPipeline::getCurrentPosition() const
         g_critical("Pipeline is not in PLAYING or PAUSED state, cannot get current position\n");
         return -1;
     }
-    gint64 duration = gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &duration) ? duration : -1;
+    gint64 duration = -1;
+    duration = gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &duration);
     return duration;
 }
 

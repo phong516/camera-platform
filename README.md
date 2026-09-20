@@ -612,11 +612,11 @@ Especially when moving to an ARM SBC, the existence of a hardware video engine d
 
 Project status:
 
-- [ ] Project skeleton
-- [ ] GStreamer installation
-- [ ] `videotestsrc` preview
-- [ ] C++ GStreamer pipeline
-- [ ] Video format control
+- [✅] Project skeleton
+- [✅] GStreamer installation
+- [✅] `videotestsrc` preview
+- [✅] C++ GStreamer pipeline
+- [✅] Video format control
 - [ ] H.264 encoding
 - [ ] Network streaming
 - [ ] Qt/QML integration

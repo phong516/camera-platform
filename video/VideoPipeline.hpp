@@ -38,6 +38,11 @@ private:
     GstElement *m_videoSink{nullptr};
     VideoCaps m_caps;
 
+    VideoPipeline(const VideoPipeline &) = delete;
+    VideoPipeline &operator=(const VideoPipeline &) = delete;
+    VideoPipeline(VideoPipeline &&) = delete;
+    VideoPipeline &operator=(VideoPipeline &&) = delete;
+
     bool isPipelineSetup() const;
     template <typename... T>
     bool isPipelineInState(T... state) const;
