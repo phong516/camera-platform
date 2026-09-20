@@ -9,5 +9,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(GStreamer REQUIRED)
 
+# Tests link against headers and the existing targets only; see tests/CMakeLists.txt.
+option(CAMERA_PLATFORM_BUILD_TESTS "Build unit tests" ON)
+
 add_subdirectory(video)
 add_subdirectory(app)
+
+if (CAMERA_PLATFORM_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

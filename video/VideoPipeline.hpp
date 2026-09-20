@@ -2,6 +2,7 @@
 
 #include <gst/gst.h>
 #include <memory>
+#include <string>
 #include "VideoSource.hpp"
 
 struct VideoCaps
@@ -28,6 +29,18 @@ public:
     gint64 getCurrentPosition() const;
     gint64 getDuration() const;
 
+    /// The underlying GstPipeline, or nullptr before setupPipeline().
+    /// Phase 7 (README lines 327-355) adds a tee branch through this handle.
+    GstElement *pipelineElement() const;
+
+    /// Non-blocking bus drain. Call from the application loop. Records
+    /// ERROR/EOS/WARNING into m_lastError and returns false on bus ERROR.
+    /// TODO(VideoPipeline.cpp): currently declared only.
+    bool pollBus();
+
+    /// Last bus error/warning text, empty when healthy.
+    std::string lastError() const;
+
 private:
     std::unique_ptr<VideoSource> m_videoSource{nullptr};
 
@@ -37,6 +50,7 @@ private:
     GstElement *m_videoCaps{nullptr};
     GstElement *m_videoSink{nullptr};
     VideoCaps m_caps;
+    std::string m_lastError;
 
     VideoPipeline(const VideoPipeline &) = delete;
     VideoPipeline &operator=(const VideoPipeline &) = delete;
