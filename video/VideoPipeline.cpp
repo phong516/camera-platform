@@ -165,6 +165,39 @@ gint64 VideoPipeline::getDuration() const
     return duration;
 }
 
+GstElement *VideoPipeline::pipelineElement() const
+{
+    if (isPipelineSetup())
+    {
+        return m_pipeline;
+    }
+    return nullptr;
+}
+
+bool VideoPipeline::pollBus()
+{
+    if (!isPipelineSetup())
+    {
+        g_critical("Please setup pipeline first\n");
+        return false;
+    }
+    if (!isPipelineInState(GST_STATE_PLAYING, GST_STATE_PAUSED))
+    {
+        g_critical("Pipeline is not in PLAYING or PAUSED state, cannot poll bus\n");
+        return false;
+    }
+    GstBus *bus = gst_element_get_bus(m_pipeline);
+    GstMessage *msg = gst_bus_poll(bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, GST_CLOCK_TIME_NONE);
+    gst_object_unref(bus);
+    if (!msg)
+    {
+        return false;
+    }
+    lastError = gst_get_message_type_get_name(GST_MESSAGE_TYPE(msg));
+    gst_message_unref(msg);
+    return true;
+}
+
 bool VideoPipeline::isPipelineSetup() const
 {
     return m_pipeline && m_source && m_videoConvert && m_videoCaps && m_videoSink;
