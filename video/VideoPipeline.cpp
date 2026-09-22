@@ -129,6 +129,11 @@ bool VideoPipeline::seekPipeline(gint64 position)
 bool VideoPipeline::setCapsProperty(const VideoCaps &caps)
 {
     m_caps = caps;
+    if (!isPipelineSetup())
+        return true;
+    
+    // Apply the caps to the videoCaps element if the pipeline is set up
+    g_object_set(m_videoCaps, "caps", m_caps.toGstCaps(), nullptr);
     return true;
 }
 

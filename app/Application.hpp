@@ -35,7 +35,7 @@
 class Application : public CameraControl
 {
 public:
-    Application();
+    Application() = default;
     ~Application();
 
     bool initialize(int argc, char **argv);
