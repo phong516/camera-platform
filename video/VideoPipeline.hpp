@@ -12,6 +12,12 @@ struct VideoCaps
     gint height{480};
     gint fps_num{30};
     gint fps_denom{1};
+
+    /// Builds the "video/x-raw" caps described by these values.
+    /// TODO(VideoPipeline.cpp): define this, then call it from both
+    /// setupPipeline() and setCapsProperty() so caps live in one place.
+    /// Caller owns the result and must gst_caps_unref() it.
+    GstCaps *toGstCaps() const;
 };
 
 class VideoPipeline
@@ -24,6 +30,7 @@ public:
     bool setupPipeline();
     bool playPipeline();
     bool pausePipeline();
+    bool stopPipeline();
     bool seekPipeline(gint64 position);
     bool setCapsProperty(const VideoCaps &caps);
     gint64 getCurrentPosition() const;

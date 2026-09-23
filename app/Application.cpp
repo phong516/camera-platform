@@ -1,6 +1,7 @@
 #include "Application.hpp"
 #include "video/TestVideoSource.hpp"
 #include "csignal"
+#include <iostream>
 
 Application::~Application()
 {
@@ -29,9 +30,10 @@ void Application::run()
     m_running = true;
     while (m_running)
     {
-        if (!m_pipeline.pollBus())
+        m_pipeline.pollBus();
+        if (!m_pipeline.lastError().empty())
         {
-            std::cerr << "Pipeline error or EOS detected, stopping application." << std::endl;
+            std::cerr << "Pipeline message: '" << m_pipeline.lastError() << "' --> stopping application." << std::endl;
             m_running = false;
             break;
         }
@@ -42,5 +44,6 @@ void Application::run()
 
 void Application::stop()
 {
-    m_pipeline.cleanup();
+    m_pipeline.stopPipeline();
+    m_running = false;
 }

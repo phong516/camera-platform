@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #include "model/CameraState.hpp"
 #include "model/SystemStatus.hpp"
@@ -32,6 +33,18 @@
 ///     at the very end of run(), after the web thread is joined.
 ///   - startCamera()/stopCamera()/setResolution()/setFrameRate() must keep
 ///     m_cameraState in sync and return false (never abort) on failure.
+///
+/// THREADING (exactly 2 threads you own: main + WebServer::run()):
+///   - main thread: run() -> m_pipeline.pollBus() and the stats refresh
+///   - web thread:  WebServer::run() -> ApiController -> cameraState()/startCamera()
+///   m_cameraState and m_systemStatus are therefore shared. Read and write them
+///   only while holding m_stateMutex (cameraState(), systemStatus(), startCamera(),
+///   stopCamera(), setResolution(), setFrameRate(), and the run() stats refresh):
+///       std::lock_guard<std::mutex> lock(m_stateMutex);
+///   Never hold m_stateMutex across a blocking GStreamer call (set_state,
+///   get_state, pollBus) — take the lock, copy, release, then call Gst.
+///   Phase 4/5 add threads (RTSP main loop, Qt GUI thread); this mutex stays the
+///   single place application state is synchronized.
 class Application : public CameraControl
 {
 public:
@@ -66,6 +79,7 @@ private:
     CloudStreamer m_cloudStreamer;
     CameraState m_cameraState;
     SystemStatus m_systemStatus;
+    mutable std::mutex m_stateMutex; // guards m_cameraState + m_systemStatus
     std::atomic<bool> m_running{false};
 
     Application(const Application &) = delete;

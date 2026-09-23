@@ -109,6 +109,12 @@ bool VideoPipeline::pausePipeline()
     return true;
 }
 
+bool VideoPipeline::stopPipeline()
+{
+    cleanup();
+    return true;
+}
+
 bool VideoPipeline::seekPipeline(gint64 position)
 {
     if (!isPipelineSetup())
@@ -150,7 +156,11 @@ gint64 VideoPipeline::getCurrentPosition() const
         return -1;
     }
     gint64 duration = -1;
-    duration = gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &duration);
+    if (!gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &duration))
+    {
+        g_critical("Failed to query current position\n");
+        return -1;
+    }
     return duration;
 }
 
@@ -192,15 +202,21 @@ bool VideoPipeline::pollBus()
         return false;
     }
     GstBus *bus = gst_element_get_bus(m_pipeline);
-    GstMessage *msg = gst_bus_poll(bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, GST_CLOCK_TIME_NONE);
+    GstMessage *msg = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR| GST_MESSAGE_EOS));
     gst_object_unref(bus);
     if (!msg)
     {
-        return false;
+        m_lastError.clear();
+        return true;
     }
-    lastError = gst_get_message_type_get_name(GST_MESSAGE_TYPE(msg));
+    m_lastError = gst_message_type_get_name(GST_MESSAGE_TYPE(msg));
     gst_message_unref(msg);
     return true;
+}
+
+std::string VideoPipeline::lastError() const
+{
+    return m_lastError;
 }
 
 bool VideoPipeline::isPipelineSetup() const
