@@ -31,22 +31,11 @@ enum class PipelineEvent
     EndOfStream
 };
 
-inline const char *toString(PipelineEvent event)
-{
-    switch (event)
-    {
-    case PipelineEvent::Error:
-        return "error";
-    case PipelineEvent::Warning:
-        return "warning";
-    case PipelineEvent::EndOfStream:
-        return "end-of-stream";
-    }
-    return "unknown";
-}
 
 /// Invoked on the GLib main context, i.e. the Application main thread.
 using PipelineEventCallback = std::function<void(PipelineEvent event, const std::string &message)>;
+
+using MessageParse = std::function<void(GstMessage*, GError**, gchar**)>;
 
 class VideoPipeline
 {
@@ -74,7 +63,7 @@ public:
     /// TODO(VideoPipeline.cpp): implement these three, and call detachBusWatch()
     /// from cleanup() BEFORE the pipeline is torn down so no callback fires
     /// during teardown.
-    bool attachBusWatch();
+    bool attachBusWatch(GMainContext *context, PipelineEventCallback callback);
     void detachBusWatch();
     void setOnPipelineEvent(PipelineEventCallback callback);
 
@@ -99,6 +88,10 @@ private:
     guint m_busWatchId{0};
     PipelineEventCallback m_onPipelineEvent;
 
+    GMainContext *m_appContext {nullptr};
+    PipelineEventCallback m_appCallback {nullptr};
+    GSource *m_busSource {nullptr};
+
     VideoPipeline(const VideoPipeline &) = delete;
     VideoPipeline &operator=(const VideoPipeline &) = delete;
     VideoPipeline(VideoPipeline &&) = delete;
@@ -110,6 +103,8 @@ private:
     bool cleanup();
     bool cleanupSubElements();
 
-    static gboolean onBusMessageStatic(GstBus *bus, GstMessage *message, gpointer userData);
+    static gboolean onBusMessageStatic(gpointer userData);
     void handleBusMessage(GstMessage *message);
+
+    std::string parseMessage(GstMessage *msg, MessageParse parser);
 };

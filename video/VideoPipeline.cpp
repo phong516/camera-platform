@@ -137,7 +137,7 @@ bool VideoPipeline::setCapsProperty(const VideoCaps &caps)
     m_caps = caps;
     if (!isPipelineSetup())
         return true;
-    
+
     // Apply the caps to the videoCaps element if the pipeline is set up
     g_object_set(m_videoCaps, "caps", m_caps.toGstCaps(), nullptr);
     return true;
@@ -189,6 +189,40 @@ GstElement *VideoPipeline::pipelineElement() const
     return nullptr;
 }
 
+bool VideoPipeline::attachBusWatch(GMainContext *context, PipelineEventCallback callback)
+{
+    if (!context || !callback)
+    {
+        return false;
+    }
+    if (!isPipelineSetup())
+    {
+        return false;
+    }
+    detachBusWatch();
+    GstBus *bus = gst_element_get_bus(m_pipeline);
+    if (!bus)
+        return false;
+    GSource *busSource = gst_bus_create_watch(bus);
+    if (!busSource)
+        return false;
+    g_source_set_callback(busSource, &VideoPipeline::onBusMessageStatic, this, NULL);
+    g_source_attach(busSource, context);
+    gst_object_unref(bus);
+    m_appContext = context;
+    m_appCallback = callback;
+    return true;
+}
+
+void VideoPipeline::detachBusWatch()
+{
+    if (m_busSource)
+    {
+        g_source_destroy(m_busSource);
+        m_busSource = nullptr;
+    }
+}
+
 bool VideoPipeline::pollBus()
 {
     if (!isPipelineSetup())
@@ -202,7 +236,7 @@ bool VideoPipeline::pollBus()
         return false;
     }
     GstBus *bus = gst_element_get_bus(m_pipeline);
-    GstMessage *msg = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR| GST_MESSAGE_EOS));
+    GstMessage *msg = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
     gst_object_unref(bus);
     if (!msg)
     {
@@ -262,6 +296,65 @@ bool VideoPipeline::cleanupSubElements()
     }
 
     return true;
+}
+
+gboolean VideoPipeline::onBusMessageStatic(gpointer userData)
+{
+    auto videoPipelineInstance = static_cast<videoPipelineInstance *>(userData);
+    if (!VideoPipeline->isPipelineSetup())
+    {
+        return G_SOURCE_CONTINUE;
+    }
+    GstBus *bus = gst_element_get_bus(m_pipeline);
+    GstMessage *msg = gst_bus_pop(bus);
+    gst_object_unref(bus);
+    if (msg)
+    {
+        handleBusMessage(msg);
+    }
+    gst_message_unref(msg);
+    return G_SOURCE_CONTINUE;
+}
+
+void VideoPipeline::handleBusMessage(GstMessage *message)
+{
+    if (!message || !m_appCallback)
+    {
+        return;
+    }
+    switch (GST_MESSAGE_TYPE(msg))
+    {
+        case GST_MESSAGE_ERROR:
+        {
+            m_appCallback(PipelineEvent::Error, parseMessage(msg, &gst_message_parse_error));
+            break;
+        }
+        case GST_MESSAGE_WARNING:
+        {
+            m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_error));
+            break;
+        }
+        case GST_MESSAGE_EOS:
+        {
+            m_appCallback(PipelineEvent::EndOfStream, "End of Stream");
+            break;
+        }
+    }
+}
+
+std::string VideoPipeline::parseMessage(GstMessage *msg, MessageParse parser)
+{
+    GError *error{nullptr};
+    gchar *debug{nullptr};
+    parser(msg, &error, &debug);
+    std::string msg = error->message;
+    if (debug)
+    {
+        msg << ": " << debug;
+    }
+    g_clear_error(&error);
+    g_free(debug);
+    return msg;
 }
 
 template <typename... T>

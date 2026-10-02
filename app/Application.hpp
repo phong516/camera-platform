@@ -108,6 +108,8 @@ private:
     guint m_sigtermSourceId{0};
     guint m_busPollId{0};
 
+    GMainContext m_context {nullptr};
+
     Application(const Application &) = delete;
     Application &operator=(const Application &) = delete;
     Application(Application &&) = delete;
