@@ -31,7 +31,6 @@ enum class PipelineEvent
     EndOfStream
 };
 
-
 /// Invoked on the GLib main context, i.e. the Application main thread.
 using PipelineEventCallback = std::function<void(PipelineEvent event, const std::string &message)>;
 
@@ -104,7 +103,7 @@ private:
     bool cleanupSubElements();
 
     static gboolean onBusMessageStatic(gpointer userData);
-    void handleBusMessage(GstMessage *message);
+    void handleBusMessage(GstMessage *msg);
 
     std::string parseMessage(GstMessage *msg, MessageParse parser);
 };

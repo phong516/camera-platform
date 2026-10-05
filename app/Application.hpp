@@ -72,18 +72,18 @@ public:
     bool setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom) override;
 
     VideoPipeline &pipeline();
-    WebServer &webServer();
-    NetworkManager &networkManager();
-    StreamServer &streamServer();
-    CloudStreamer &cloudStreamer();
+    // WebServer &webServer();
+    // NetworkManager &networkManager();
+    // StreamServer &streamServer();
+    // CloudStreamer &cloudStreamer();
 
 private:
     VideoPipeline m_pipeline;
-    WebServer m_webServer;
-    std::unique_ptr<ApiController> m_apiController; // needs *this, built in initialize()
-    NetworkManager m_networkManager;
-    StreamServer m_streamServer;
-    CloudStreamer m_cloudStreamer;
+    // WebServer m_webServer;
+    // std::unique_ptr<ApiController> m_apiController; // needs *this, built in initialize()
+    // NetworkManager m_networkManager;
+    // StreamServer m_streamServer;
+    // CloudStreamer m_cloudStreamer;
     CameraState m_cameraState;
     SystemStatus m_systemStatus;
     mutable std::mutex m_stateMutex; // guards m_cameraState + m_systemStatus
@@ -108,7 +108,7 @@ private:
     guint m_sigtermSourceId{0};
     guint m_busPollId{0};
 
-    GMainContext m_context {nullptr};
+    GMainContext *m_context {nullptr};
 
     Application(const Application &) = delete;
     Application &operator=(const Application &) = delete;

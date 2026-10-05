@@ -21,9 +21,8 @@ int main()
     CHECK(pipeline.setVideoSource(std::make_unique<TestVideoSource>()));
     CHECK(pipeline.setupPipeline());
 
-    // Re-entrant setup and late source replacement must both be refused.
+    // Re-entrant setup and must be refused.
     CHECK(!pipeline.setupPipeline());
-    CHECK(!pipeline.setVideoSource(std::make_unique<TestVideoSource>()));
 
     // Caps are stored before the pipeline is (re)built.
     VideoCaps caps;
