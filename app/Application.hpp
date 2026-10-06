@@ -104,8 +104,10 @@ private:
     static gboolean onBusPoll(gpointer userData);
 
     GMainLoop *m_mainLoop{nullptr};
-    guint m_sigintSourceId{0};
-    guint m_sigtermSourceId{0};
+    // GSource*, not source ids: g_source_remove() cannot reach a source on a
+    // non-default context, so we destroy these by pointer.
+    GSource *m_sigintSource{nullptr};
+    GSource *m_sigtermSource{nullptr};
     guint m_busPollId{0};
 
     GMainContext *m_context {nullptr};

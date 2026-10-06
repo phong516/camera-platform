@@ -1,14 +1,7 @@
 #include "app/Application.hpp"
 #include "video/TestVideoSource.hpp"
 #include <iostream>
-#include <csignal>
-
-static volatile std::sig_atomic_t g_running = 1;
-
-static void signalHandler(int signal)
-{
-    g_running = 0;
-}
+#include <glib-unix.h>
 
 Application::~Application()
 {
@@ -19,10 +12,16 @@ Application::~Application()
 
     // GLib is independent of Gst: safe to release here. These are plain glib
     // objects, not GstObjects, so they survive past gst_deinit just fine.
-    if (m_mainLoop)
+    // Signal sources attached to m_context are NOT freed by unref'ing the
+    // context: destroy them explicitly, then drop our creation ref.
+    for (GSource **source : {&m_sigintSource, &m_sigtermSource})
     {
-        g_main_loop_unref(m_mainLoop);
-        m_mainLoop = nullptr;
+        if (*source)
+        {
+            g_source_destroy(*source);
+            g_source_unref(*source);
+            *source = nullptr;
+        }
     }
     if (m_context)
     {
@@ -34,11 +33,15 @@ Application::~Application()
 bool Application::initialize(int argc, char **argv)
 {
     gst_init(&argc, &argv);
-    std::signal(SIGINT, &signalHandler);
-    std::signal(SIGTERM, &signalHandler);
-    std::unique_ptr<VideoSource> videoSource = std::make_unique<TestVideoSource>();
+    // m_context must exist BEFORE installSignalHandlers(): the signal sources
+    // are attached to it, and a null context silently means "no handler".
     m_context = g_main_context_new();
     m_mainLoop = g_main_loop_new(m_context, FALSE);
+    std::unique_ptr<VideoSource> videoSource = std::make_unique<TestVideoSource>();
+    if (!installSignalHandlers())
+    {
+        std::cerr << "Signal handlers not installed: Ctrl+C will use the default (kill) action." << std::endl;
+    }
     if (!m_pipeline.setVideoSource(std::move(videoSource)))
         return false;
     if (!m_pipeline.setupPipeline())
@@ -48,15 +51,21 @@ bool Application::initialize(int argc, char **argv)
 
 void Application::run()
 {
-    g_running = 1;
+    m_running = true;
     m_pipeline.playPipeline();
-    while (g_running)
+    while (m_running)
     {
+        // The signal sources live on m_context, so somebody has to iterate it:
+        // otherwise SIGINT only lands in the pipe and onUnixSignal never runs.
+        // Drain what is pending without blocking, then go back to sleeping.
+        while (g_main_context_iteration(m_context, FALSE))
+        {
+        }
         m_pipeline.pollBus();
         if (!m_pipeline.lastError().empty())
         {
             std::cerr << "Pipeline message: '" << m_pipeline.lastError() << "' --> stopping application." << std::endl;
-            g_running = 1;
+            m_running = false;
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -66,8 +75,13 @@ void Application::run()
 
 void Application::stop()
 {
+    m_running = false; // re-arming the loop here would undo the quit we just handled
     m_pipeline.stopPipeline();
-    g_running = 1;
+    if (m_mainLoop)
+    {
+        g_main_loop_unref(m_mainLoop);
+        m_mainLoop = nullptr;
+    }
 }
 
 CameraState Application::cameraState() const
@@ -110,6 +124,36 @@ bool Application::setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom)
     m_cameraState.fpsDenom = fpsDenom;
     return false;
 }
+bool Application::installSignalHandlers()
+{
+    if (!m_context)
+    {
+        return false;
+    }
+    // g_unix_signal_add() hardcodes the DEFAULT GMainContext, which nothing in
+    // this app iterates: every source here lives on m_context. Worse, it
+    // installs the sigaction for SIGINT immediately, so Ctrl+C stops killing
+    // the process the moment it is called, while the callback that would stop
+    // us properly never fires. Build the source by hand and attach it to our
+    // own context instead.
+    //
+    // NOTE: g_source_remove(id) does NOT work for a non-default context (it
+    // only looks in the default one). Hold the GSource* and destroy it.
+    auto attachSignalSource = [this](int signum) -> GSource *
+    {
+        GSource *source = g_unix_signal_source_new(signum);
+        if (!source)
+        {
+            return nullptr;
+        }
+        g_source_set_callback(source, &Application::onUnixSignal, this, nullptr);
+        g_source_attach(source, m_context);
+        return source; // creation ref stays ours; the attachment keeps it alive
+    };
+    m_sigintSource = attachSignalSource(SIGINT);
+    m_sigtermSource = attachSignalSource(SIGTERM);
+    return m_sigintSource != nullptr && m_sigtermSource != nullptr;
+}
 bool Application::attachPipelineEvents()
 {
     // assume pipeline is setup
@@ -130,4 +174,11 @@ bool Application::attachPipelineEvents()
 void Application::onPipelineEvent(PipelineEvent event, const std::string &message)
 {
 
+}
+
+gboolean Application::onUnixSignal(gpointer userData)
+{
+    auto app = static_cast<Application *>(userData);
+    app->m_running = false;
+    return G_SOURCE_CONTINUE;
 }
