@@ -46,36 +46,23 @@ bool Application::initialize(int argc, char **argv)
         return false;
     if (!m_pipeline.setupPipeline())
         return false;
+    if (!attachPipelineEvents())
+        return false;
     return true;
 }
 
 void Application::run()
 {
-    m_running = true;
     m_pipeline.playPipeline();
-    while (m_running)
+    if (m_mainLoop)
     {
-        // The signal sources live on m_context, so somebody has to iterate it:
-        // otherwise SIGINT only lands in the pipe and onUnixSignal never runs.
-        // Drain what is pending without blocking, then go back to sleeping.
-        while (g_main_context_iteration(m_context, FALSE))
-        {
-        }
-        m_pipeline.pollBus();
-        if (!m_pipeline.lastError().empty())
-        {
-            std::cerr << "Pipeline message: '" << m_pipeline.lastError() << "' --> stopping application." << std::endl;
-            m_running = false;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        g_main_loop_run(m_mainLoop);
     }
     stop();
 }
 
 void Application::stop()
 {
-    m_running = false; // re-arming the loop here would undo the quit we just handled
     m_pipeline.stopPipeline();
     if (m_mainLoop)
     {
@@ -154,6 +141,13 @@ bool Application::installSignalHandlers()
     m_sigtermSource = attachSignalSource(SIGTERM);
     return m_sigintSource != nullptr && m_sigtermSource != nullptr;
 }
+void Application::requestStop()
+{
+    if (m_mainLoop)
+    {
+        g_main_loop_quit(m_mainLoop);
+    }
+}
 bool Application::attachPipelineEvents()
 {
     // assume pipeline is setup
@@ -173,12 +167,28 @@ bool Application::attachPipelineEvents()
 
 void Application::onPipelineEvent(PipelineEvent event, const std::string &message)
 {
-
+    switch (event)
+    {
+        case PipelineEvent::Error:
+            std::cerr << "Pipeline error: " << message << std::endl;
+            requestStop();
+            break;
+        case PipelineEvent::EndOfStream:
+            std::cout << "End of stream\n";
+            requestStop();
+            break;
+        case PipelineEvent::Warning:
+            std::cout << "Pipeline warning: " << message << std::endl;
+            break;
+        default:
+            break;
+    }
 }
 
 gboolean Application::onUnixSignal(gpointer userData)
 {
+    std::cout << "Ctrl + C\n";
     auto app = static_cast<Application *>(userData);
-    app->m_running = false;
+    app->requestStop();
     return G_SOURCE_CONTINUE;
 }

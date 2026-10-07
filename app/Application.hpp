@@ -71,12 +71,6 @@ public:
     bool setResolution(std::uint32_t width, std::uint32_t height) override;
     bool setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom) override;
 
-    VideoPipeline &pipeline();
-    // WebServer &webServer();
-    // NetworkManager &networkManager();
-    // StreamServer &streamServer();
-    // CloudStreamer &cloudStreamer();
-
 private:
     VideoPipeline m_pipeline;
     // WebServer m_webServer;
@@ -87,7 +81,6 @@ private:
     CameraState m_cameraState;
     SystemStatus m_systemStatus;
     mutable std::mutex m_stateMutex; // guards m_cameraState + m_systemStatus
-    std::atomic<bool> m_running{false};
 
     // --- GLib main-loop sources (see the contract block above) ---
     bool installSignalHandlers();
@@ -96,19 +89,16 @@ private:
     // Pick ONE in run(). Neither lets this class see GstBus or GstMessage:
     // the bus belongs to VideoPipeline (README design principle, lines 110-119).
     bool attachPipelineEvents(); // PUSH: VideoPipeline raises plain-C++ events
-    bool attachBusPoll();        // PULL: g_timeout_add -> m_pipeline.pollBus()
 
     void onPipelineEvent(PipelineEvent event, const std::string &message);
 
     static gboolean onUnixSignal(gpointer userData);
-    static gboolean onBusPoll(gpointer userData);
 
     GMainLoop *m_mainLoop{nullptr};
     // GSource*, not source ids: g_source_remove() cannot reach a source on a
     // non-default context, so we destroy these by pointer.
     GSource *m_sigintSource{nullptr};
     GSource *m_sigtermSource{nullptr};
-    guint m_busPollId{0};
 
     GMainContext *m_context {nullptr};
 
