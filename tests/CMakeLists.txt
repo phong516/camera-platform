@@ -11,6 +11,10 @@ target_include_directories(test_http PRIVATE
     ${PROJECT_SOURCE_DIR}
 )
 
+target_link_libraries(test_http PRIVATE
+    web_lib
+)
+
 add_test(NAME web.http COMMAND test_http)
 
 add_executable(test_videopipeline

@@ -6,6 +6,58 @@
 The project is developed on a Linux PC first and is intended to move to an ARM
 single-board computer, such as an Orange Pi, once the core pipeline is stable.
 
+## Architecture Pivot: Server / Client Split
+
+> **The design in this README is being superseded.** The single-process
+> `camera-platform` binary (capture + GStreamer + Qt/QML + HTTP in one process) is
+> being split into a headless streaming **server** and swappable **clients**.
+> See [docs/ARCHITECTURE-SERVER-CLIENT.md](docs/ARCHITECTURE-SERVER-CLIENT.md) for
+> the full design. This README remains the record of the pre-split plan.
+
+The new shape:
+
+```text
+  camera-server (:8080)          supervisor, headless
+        |  on/off per profile, viewer counts
+        v
+  camera-profile  (ONE process, ONE pipeline)
+        |
+        videotestsrc ! tee
+          t. ! queue ! [valve ! videoscale ! x264enc ! rtph264pay]  -> :8554/hd
+          t. ! queue ! [valve ! videoscale ! x264enc ! rtph264pay]  -> :8554/sd
+          t. ! queue ! [valve ! videoscale ! x264enc ! rtph264pay]  -> :8554/low
+        |  RTSP
+        v
+  client-qt   /   browser        presentation only, never links GStreamer
+```
+
+Two decisions drive the whole design:
+
+- **One capture, fanned out by `tee`.** `tee` pushes the same buffer to every branch
+  by reference, so there is no pixel copy on the fan-out and the camera is opened
+  exactly once.
+- **An idle profile costs ~0 CPU, switched by a `valve`.** `valve drop=true` discards
+  that branch's buffers so its encoder never runs; `drop=false` resumes it. `drop` is
+  changeable in any pipeline state, so profiles toggle live.
+
+**A pipeline's state is global, so `gst_element_set_state(profilebin, PAUSED)` does
+not work** - it returns success, changes nothing, and `gst_element_get_state()` on a
+child reports the parent pipeline's state. The valve is the switch.
+
+Measured on this machine (two branches, one valve closed, 5 s per phase):
+
+| Phase | CPU | Branch A | Branch B |
+| --- | --- | --- | --- |
+| valve OPEN | 21.8% of one core | 30.0 fps | 30.0 fps |
+| valve CLOSED | 11.0% | 30.0 fps | 0.0 fps |
+| valve REOPENED | 23.6% | 30.0 fps | 30.0 fps |
+
+CPU halves and the untoggled branch holds a steady 30 fps, so closing a branch does
+not starve the tee.
+
+This still honours the "capture and encode once, then distribute" principle: within a
+profile, `shared=TRUE` on the RTSP media factory means all viewers share one encode.
+
 ## Current Focus
 
 The first milestone is deliberately small:
@@ -120,60 +172,85 @@ The high-level architecture is:
 
 ## Project Structure
 
+> The tree below reflects the **server / client split**, which is implemented.
+> See [docs/ARCHITECTURE-SERVER-CLIENT.md](docs/ARCHITECTURE-SERVER-CLIENT.md).
+
 ```text
 camera-platform/
 │
-├── CMakeLists.txt
-├── cmake/
-│   └── FindGStreamer.cmake
+├── CMakeLists.txt              # finds deps, adds the subdirectories
 │
-├── app/
-│   ├── main.cpp
-│   ├── Application.hpp
-│   └── Application.cpp
+├── common/                     # shared, header-only (no Gst, no Qt)
+│   ├── Protocol.hpp            # ports, API paths, mount names, state names
+│   └── README.md
 │
-├── video/
-│   ├── VideoPipeline.hpp
-│   ├── VideoPipeline.cpp
-│   │
+├── model/                      # CameraState, SystemStatus (value types)
+│
+├── web/                        # HTTP server + message parsing (POSIX sockets)
+│   ├── WebServer.{hpp,cpp}     # cpp empty until Phase 3
+│   ├── ApiController.{hpp,cpp} # cpp empty until Phase 3
+│   └── HttpMessage.hpp
+│
+├── video/                      # GStreamer pipeline + video sources
+│   ├── VideoPipeline.{hpp,cpp}
 │   ├── VideoSource.hpp
-│   ├── TestVideoSource.hpp
-│   ├── TestVideoSource.cpp
-│   ├── CameraVideoSource.hpp
-│   └── CameraVideoSource.cpp
+│   ├── TestVideoSource.{hpp,cpp}
+│   └── CameraVideoSource.{hpp,cpp}
 │
-├── streaming/
-│   ├── StreamServer.hpp
-│   ├── StreamServer.cpp
-│   ├── CloudStreamer.hpp
-│   └── CloudStreamer.cpp
+├── server/                     # -> camera-server   (headless, never links Qt)
+│   ├── main.cpp                # gst_init / run / gst_deinit
+│   ├── Application.{hpp,cpp}   # pipeline + GMainLoop + signal sources
+│   └── CloudStreamer.hpp       # interface only, Phase 8
 │
-├── web/
-│   ├── WebServer.hpp
-│   ├── WebServer.cpp
-│   ├── ApiController.hpp
-│   └── ApiController.cpp
+├── client-qt/                  # -> camera-client-qt (never links GStreamer)
+│   ├── main.cpp                # QQmlApplicationEngine, exposes `backend`
+│   ├── UI-PROTOTYPE.md
+│   └── qml/                    # QML module "CameraPlatform" (STATIC)
+│       ├── CameraBackend.{hpp,cpp}   # QML bridge: JSON -> properties
+│       ├── Main.qml
+│       ├── StatusBar.qml
+│       ├── CameraView.qml      # still empty, not yet in the module
+│       └── Settings.qml        # still empty, not yet in the module
 │
-├── system/
-│   ├── NetworkManager.hpp
-│   └── NetworkManager.cpp
+├── tools/                      # camera-cli lands in Phase 3
 │
-├── model/
-│   ├── CameraState.hpp
-│   └── SystemStatus.hpp
+├── cmake/
+│   ├── FindGStreamer.cmake
+│   └── FindGStreamerRtspServer.cmake
 │
-├── qml/
-│   ├── Main.qml
-│   ├── CameraView.qml
-│   ├── StatusBar.qml
-│   └── Settings.qml
+├── docs/
+│   └── ARCHITECTURE-SERVER-CLIENT.md
 │
-└── tests/
-    ├── video/
-    └── web/
+└── tests/                      # no framework; see TestSupport.hpp
+    ├── video/test_videopipeline.cpp
+    └── web/test_http.cpp
 ```
 
-Not all components are implemented yet. The project is developed incrementally.
+The `app/`, `qml/`, `streaming/`, and `system/` directories from the pre-split tree
+are gone: `app/` became `server/` + `client-qt/`, and `streaming/` + `system/` were
+empty stubs.
+
+Includes are written **repo-root-relative** (`"server/Application.hpp"`,
+`"video/VideoPipeline.hpp"`), so each target puts `${PROJECT_SOURCE_DIR}` on its
+include path explicitly.
+
+### Building
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+
+./build/server/camera-server          # headless; needs a display for autovideosink
+./build/client-qt/camera-client-qt    # the Qt client
+```
+
+The server has no Qt dependency at all, so a headless or embedded build is:
+
+```bash
+cmake -S . -B build -DCAMERA_PLATFORM_WITH_QT=OFF
+cmake --build build -j
+```
 
 ## Development Roadmap
 
@@ -470,6 +547,23 @@ gst-launch-1.0 --version
 gst-inspect-1.0 videotestsrc
 ```
 
+### Building with the QML UI
+
+Qt6 is optional. The build looks for it automatically:
+
+```bash
+sudo apt install qt6-base-dev qt6-declarative-dev
+
+cmake -S . -B build                                  # AUTO: QML UI if Qt6 is found
+cmake -S . -B build -DCAMERA_PLATFORM_WITH_QT=ON     # require Qt6, fail if missing
+cmake -S . -B build -DCAMERA_PLATFORM_WITH_QT=OFF    # console app only
+cmake --build build -j
+```
+
+With Qt6 enabled, `client-qt/qml/*.qml` is compiled into a `CameraPlatform` QML
+module and embedded in the **`camera-client-qt`** binary as Qt resources. The
+server (`camera-server`) is built either way and never links Qt.
+
 ### First Test
 
 Before building the C++ application, verify GStreamer independently:
@@ -617,20 +711,29 @@ Project status:
 - [✅] `videotestsrc` preview
 - [✅] C++ GStreamer pipeline
 - [✅] Video format control
+- [✅] Server / client split (repo restructured, two targets build)
 - [ ] H.264 encoding
-- [ ] Network streaming
-- [ ] Qt/QML integration
-- [ ] Web server
-- [ ] Multiple outputs
+- [ ] Network streaming (RTSP, one mount per profile)
+- [ ] Tee + valve profile switching (mechanism measured, not yet built)
+- [ ] Qt/QML client (window loads; no backend wired yet)
+- [ ] Web control page
+- [ ] Browser video (WebRTC bridge)
 - [ ] Cloud streaming
 - [ ] USB camera
 - [ ] ARM64 build
 - [ ] Orange Pi deployment
 
-The immediate target is:
+The immediate target is now:
+
+```text
+camera-profile  ->  tee + valve  ->  GstRtspServer :8554/hd  ->  Qt client
+```
+
+i.e. get two profiles sharing one capture, streaming over RTSP, and played back by
+the client - then confirm that closing one profile's valve drops CPU while the other
+keeps playing. The old target below (`videotestsrc` on screen in one
+process) is already done and is kept only as the historical starting point.
 
 ```text
 C++ -> GStreamer -> videotestsrc -> screen
 ```
-
-Everything else comes after that.

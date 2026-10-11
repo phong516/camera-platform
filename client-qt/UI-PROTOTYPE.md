@@ -1,12 +1,14 @@
 # QML UI Prototype (Phase 5)
 
 This is a **drawing, not code**. No `.qml` file should be written from this until
-the Qt6 backend exists. Use it as the spec for `qml/Main.qml`,
-`qml/CameraView.qml`, `qml/StatusBar.qml`, `qml/Settings.qml`.
+the Qt6 backend exists. Use it as the spec for `client-qt/qml/Main.qml`,
+`client-qt/qml/CameraView.qml`, `client-qt/qml/StatusBar.qml`,
+`client-qt/qml/Settings.qml`.
 
-Source of truth for the C++ side: `app/CameraBackend.hpp` (`CameraBackend`), which
-forwards to `Application`. QML never touches `Application`, `VideoPipeline`, or
-GStreamer directly (README lines 110-119).
+Source of truth for the C++ side: `client-qt/qml/CameraBackend.hpp`
+(`CameraBackend`). It talks to the server over HTTP, not to `Application`, so the
+client never links the server and QML never touches `VideoPipeline` or GStreamer
+(see docs/ARCHITECTURE-SERVER-CLIENT.md).
 
 ## Window layout
 
@@ -88,8 +90,10 @@ Enable/disable rules:
    uploaded via `QVideoFrame` / `QImage` on the render thread.
 
 Option 1 needs `sudo apt install qt6-base-dev qt6-declarative-dev
-gstreamer1.0-qt6`. Until then `CameraView.qml` can only be a placeholder, and
-`CameraBackend.hpp` stays behind `CAMERA_PLATFORM_WITH_QT`.
+gstreamer1.0-qt6`. Qt6 is already installed here and CMake compiles `qml/` into
+a `CameraPlatform` QML module, so `CameraView.qml` is a placeholder only until
+a sink exists; `client-qt/qml/CameraBackend.hpp` is only built when Qt6 is found
+(the whole `client-qt/` directory is skipped otherwise).
 
 ## Phase 5 checklist (for QML work, later)
 
@@ -98,4 +102,4 @@ gstreamer1.0-qt6`. Until then `CameraView.qml` can only be a placeholder, and
 - [ ] `CameraView.qml` — placeholder, then real surface once a sink exists
 - [ ] `Settings.qml` — source/resolution/fps combos + Start/Stop buttons
 - [ ] Install Qt6 + the qt6 GStreamer plugin, enable `CAMERA_PLATFORM_WITH_QT`
-- [ ] Implement `CameraBackend.cpp` and register it as `backend` in `main()`
+- [x] Implement `CameraBackend.cpp` and register it as `backend` in `main()`

@@ -3,7 +3,7 @@ import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Window {
+ApplicationWindow {
     id: root
     title: "Camera Platform"
     visible: true
@@ -19,10 +19,10 @@ Window {
         anchors.fill: parent
         StatusBar {
         }
-        CameraView {
-        }
-        Settings {
+        // CameraView {
+        // }
+        // Settings {
 
-        }
+        // }
     }
 }

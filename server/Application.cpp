@@ -1,4 +1,4 @@
-#include "app/Application.hpp"
+#include "server/Application.hpp"
 #include "video/TestVideoSource.hpp"
 #include <iostream>
 #include <glib-unix.h>

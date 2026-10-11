@@ -9,15 +9,15 @@
 
 #include "model/CameraState.hpp"
 #include "model/SystemStatus.hpp"
-#include "streaming/CloudStreamer.hpp"
-#include "streaming/StreamServer.hpp"
-#include "system/NetworkManager.hpp"
 #include "video/VideoPipeline.hpp"
 #include "web/ApiController.hpp"
-#include "web/WebServer.hpp"
 
-/// Top-level coordinator: owns the pipeline and every service, and is the only
-/// place that knows how they fit together.
+/// Top-level coordinator: owns the pipeline and the services around it, and is
+/// the only place that knows how they fit together.
+///
+/// Phase 1: owns only the VideoPipeline (single sink, autovideosink).
+/// Phase 2: the pipeline becomes tee + one valve-gated branch per profile.
+/// Phase 3: gains the control plane (WebServer + ApiController + ProfileManager).
 ///
 /// STATUS: header only. Application.cpp is the implementation task.
 ///
@@ -73,11 +73,9 @@ public:
 
 private:
     VideoPipeline m_pipeline;
-    // WebServer m_webServer;
-    // std::unique_ptr<ApiController> m_apiController; // needs *this, built in initialize()
-    // NetworkManager m_networkManager;
-    // StreamServer m_streamServer;
-    // CloudStreamer m_cloudStreamer;
+    // Phase 3 adds, once their implementations exist:
+    //   WebServer                     m_webServer;
+    //   std::unique_ptr<ApiController> m_apiController;  // needs *this
     CameraState m_cameraState;
     SystemStatus m_systemStatus;
     mutable std::mutex m_stateMutex; // guards m_cameraState + m_systemStatus
