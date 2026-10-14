@@ -17,9 +17,9 @@ qt_add_qml_module(camera_platform_qml
     OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/CameraPlatform
     QML_FILES
         Main.qml
-        # CameraView.qml
+        CameraView.qml
         StatusBar.qml
-        # Settings.qml
+        Settings.qml
     SOURCES
         CameraBackend.cpp
 )

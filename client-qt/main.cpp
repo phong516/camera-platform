@@ -14,10 +14,10 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    CameraBackend backend;
+    // CameraBackend backend;
 
     QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+    // engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
     engine.loadFromModule("CameraPlatform", "Main");
     if (engine.rootObjects().isEmpty())
     {
