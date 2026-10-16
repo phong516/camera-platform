@@ -26,3 +26,12 @@
 //   [ ] Nothing here links GStreamer: the client gets video over RTSP and
 //       control over HTTP (docs/ARCHITECTURE-SERVER-CLIENT.md).
 // ===========================================================================
+
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+Rectangle {
+    id: root
+    color: "black"
+}
