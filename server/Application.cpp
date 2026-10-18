@@ -73,11 +73,13 @@ void Application::stop()
 
 CameraState Application::cameraState() const
 {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     return m_cameraState;
 }
 
 SystemStatus Application::systemStatus() const
 {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     return m_systemStatus;
 }
 
@@ -91,7 +93,7 @@ bool Application::stopCamera()
 }
 bool Application::setResolution(std::uint32_t width, std::uint32_t height)
 {
-    if (width <= 0 || height <= 0)
+    if (width == 0 || height == 0)
     {
         return false;
     }
@@ -109,7 +111,7 @@ bool Application::setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom)
     std::lock_guard lock(m_stateMutex);
     m_cameraState.fpsNum = fpsNum;
     m_cameraState.fpsDenom = fpsDenom;
-    return false;
+    return true;
 }
 bool Application::installSignalHandlers()
 {

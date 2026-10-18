@@ -205,11 +205,11 @@ bool VideoPipeline::attachBusWatch(GMainContext *context, PipelineEventCallback 
     {
         return false;
     }
+    setOnPipelineEvent(callback);
     g_source_set_callback(m_busSource, &VideoPipeline::onBusMessageStatic, this, NULL);
     g_source_attach(m_busSource, context);
     gst_object_unref(bus);
     m_appContext = context;
-    m_appCallback = callback;
     return true;
 }
 
@@ -218,8 +218,14 @@ void VideoPipeline::detachBusWatch()
     if (m_busSource)
     {
         g_source_destroy(m_busSource);
+        g_source_unref(m_busSource);
         m_busSource = nullptr;
     }
+}
+
+void VideoPipeline::setOnPipelineEvent(PipelineEventCallback callback)
+{
+    m_appCallback = callback;
 }
 
 bool VideoPipeline::pollBus()
@@ -239,7 +245,6 @@ bool VideoPipeline::pollBus()
     gst_object_unref(bus);
     if (!msg)
     {
-        m_lastError.clear();
         return true;
     }
     m_lastError = gst_message_type_get_name(GST_MESSAGE_TYPE(msg));
@@ -331,7 +336,7 @@ void VideoPipeline::handleBusMessage(GstMessage *msg)
     }
     case GST_MESSAGE_WARNING:
     {
-        m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_error));
+        m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_warning));
         break;
     }
     case GST_MESSAGE_EOS:
@@ -347,7 +352,7 @@ std::string VideoPipeline::parseMessage(GstMessage *msg, MessageParse parser)
     GError *error{nullptr};
     gchar *debug{nullptr};
     parser(msg, &error, &debug);
-    std::string message = error->message;
+    std::string message = error ? error->message : "unknown";
     if (debug)
     {
         message += ": ";

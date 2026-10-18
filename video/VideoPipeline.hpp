@@ -84,8 +84,6 @@ private:
     GstElement *m_videoSink{nullptr};
     VideoCaps m_caps;
     std::string m_lastError;
-    guint m_busWatchId{0};
-    PipelineEventCallback m_onPipelineEvent;
 
     GMainContext *m_appContext {nullptr};
     PipelineEventCallback m_appCallback {nullptr};
