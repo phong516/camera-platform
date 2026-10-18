@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 7 — Recording &amp; Snapshots: The EOS Message That Never Comes</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0007</p>
+<h1>Recording &amp; Snapshots: The EOS Message That Never Comes</h1>
+<p class="subtitle">Two derived streams from one tee: an on-demand MP4 recorder, and a 35-millisecond JPEG snapshot. One of them taught us that EOS messages are a lie when other branches are alive.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> Phase 3 asks for recording and snapshot endpoints on the same live stream as RTSP. Both are <em>branches</em> — the tee patterns from Lessons 3–4, one level up. Nothing new under the sun; two new traps in the details.
+</div>
+
+<h2>Concept: derived outputs are just more branches</h2>
+
+<pre class="diagram">producer (videotestsrc→x264) ─▶ tee ─┬─ queue ─▶ appsink        (RTSP bridge, always on)
+                                      ├─ queue ─▶ h264parse ─▶ mp4mux ─▶ filesink   (recorder, on demand)
+                                      └─ queue ─▶ valve ─▶ jpegenc ─▶ appsink      (snapshots, one frame)</pre>
+
+<p>Both features reuse the machinery you already own:</p>
+
+<table>
+<tr><th></th><th>Recorder</th><th>Snapshot</th></tr>
+<tr><td>Built when</td><td>record starts (mid-run join)</td><td>once at startup</td></tr>
+<tr><td>Gated by</td><td>unlinked/relinked from tee</td><td><code>valve drop=true</code> (start-closed)</td></tr>
+<tr><td>Stopped by</td><td>unlink + push EOS into the branch</td><td>close valve after pulling one frame</td></tr>
+<tr><td>Measured cost</td><td>541 KB per 2 s at 720p (~2.2 Mbps)</td><td>~35 ms, ~82 KB per JPEG</td></tr>
+</table>
+
+<h2>Lab 1 — the recorder (<code>labs/lab7-record.cpp</code>)</h2>
+
+<p>Build the chain on record-start, ghost-pad it, link to the tee, sync state with parent — the exact mid-run join from Lesson 3. Stop = unlink, send EOS into the branch, wait for it to drain, tear down.</p>
+
+<pre><code>[+ 2805ms] rec start -> rec1.mp4 (faststart=no, rtsp consumer at 83 samples)
+[+ 4790ms] rec stop: unlinked from tee, EOS sent into branch
+[+ 4791ms] EOS event reached filesink -> mux finalized        &lt;- 1 ms later
+[+ 6791ms] rec start -> rec2.mp4 (faststart=yes, rtsp consumer at 202 samples)
+[+ 8790ms] rec stop: unlinked from tee, EOS sent into branch
+[+ 8792ms] EOS event reached filesink -> mux finalized        &lt;- 2 ms later</code></pre>
+
+<table>
+<tr><th>Result</th><th>Numbers</th></tr>
+<tr><td><strong>rec1.mp4</strong> — 2 s, <code>faststart=false</code>: playable, moov atom at the end of the file.</td><td class="num">541 KB</td></tr>
+<tr><td><strong>rec2.mp4</strong> — 2 s, <code>faststart=true</code>: playable, moov atom within the first 128 bytes (that's what faststart buys: a file that can play before it finishes downloading).</td><td class="num">543 KB (0.4% larger)</td></tr>
+<tr><td><strong>Finalize is instant.</strong> EOS reaches the filesink 1–2 ms after we send it — the queue drains the in-flight ~1 s of frames without drama.</td><td class="num">1–2 ms</td></tr>
+<tr><td><strong>rec_bad.mp4</strong> — process SIGKILLed mid-recording: 426 KB of real video bytes, no moov atom, unplayable forever — <code>qtdemux</code> says <code>no known streams found</code>.</td><td class="num">0 moov</td></tr>
+</table>
+
+<div class="box warn">
+<span class="box-title">The trap: waiting for the EOS bus message hangs forever</span>
+<p>The natural stop-detection — <code>gst_bus_timed_pop_filtered(bus, timeout, GST_MESSAGE_EOS)</code> — timed out in every single run, even though the file finalized correctly. The investigation, in order:</p>
+<ol>
+  <li>A bus watch logging <em>every</em> message for 6 s: not a single <code>eos</code> message. Ever.</li>
+  <li>A pad probe on the filesink's sink pad: <code>PROBE: EOS reached filesink0:sink</code> — the EOS <em>event</em> arrives instantly.</li>
+  <li><code>grep moov recdbg.mp4</code> immediately after: moov present — <code>mp4mux</code> had already finalized <em>before</em> forwarding the event.</li>
+</ol>
+<p><strong>Why no message:</strong> sinks don't put their EOS message on the bus for you to see directly — their parent <code>GstBin</code> consumes child EOS messages and only aggregates upward when <em>all sinks in that bin</em> have finished. Our pipeline has a second sink that never finishes: the always-on RTSP branch. So the pipeline-level EOS never fires. You can wait for it until the heat death of the universe.</p>
+</div>
+
+<div class="box rule">
+<span class="box-title">The fix — detect finalize by event, not by message</span>
+<pre><code>gst_pad_add_probe(gst_element_get_static_pad(filesink, "sink"),
+                  GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, on_branch_event, NULL, NULL);
+/* callback: GST_EVENT_EOS arriving here means mp4mux already wrote the moov */</code></pre>
+<p>EOS arriving at the <em>sink</em> is the commit point: <code>mp4mux</code> finalizes its file during EOS handling, <em>then</em> forwards the event downstream. Probe fires = file complete. Keep the timeout fallback for a wedged branch, but with the probe it never triggers (1–2 ms).</p>
+</div>
+
+<h2>Lab 2 — snapshots (<code>labs/lab7-snapshot.cpp</code>)</h2>
+
+<p id="">The snapshot branch exists from startup, gated by a start-closed valve — which is Lesson 4's resolved pattern again: <code>valve drop=true</code> + <code>appsink async=false</code> means no preroll wait, no permanent stall. On request: open valve, poll <code>gst_app_sink_try_pull_sample(sink, 0)</code> from the main loop, close valve when a frame lands.</p>
+
+<pre><code>[+   29ms] pipeline PLAYING (valve in PLAYING, drop=true)
+[+ 2237ms] snapshot 1: valve opened (drop=false)
+[+ 2276ms] snapshot 1: JPEG delivered 38ms after valve open (82288 bytes, SOI ok)
+[+ 4237ms] snapshot 2: valve opened (drop=false)
+[+ 4274ms] snapshot 2: JPEG delivered 36ms after valve open (82380 bytes, SOI ok)
+[+ 6237ms] snapshot 3: valve opened (drop=false)
+[+ 6271ms] snapshot 3: JPEG delivered 33ms after valve open (82289 bytes, SOI ok)</code></pre>
+
+<table>
+<tr><th>Observation</th><th>Numbers</th></tr>
+<tr><td><strong>33–38 ms end to end</strong>, dominated by the wait for the next frame boundary (33 ms at 30 fps) plus <code>jpegenc</code> (~1–5 ms). That's the budget your HTTP <code>/snapshot</code> endpoint can promise.</td><td class="num">33–38 ms, ~82 KB</td></tr>
+<tr><td><strong>JPEG header check</strong> (first two bytes <code>FF D8</code>) in the lab proves it's a real JPEG, not a zero-copy surprise.</td><td class="num">SOI ok</td></tr>
+<tr><td><strong>No stall with the valve closed</strong> — the valve drops frames before <code>jpegenc</code>, the queue drains, the tee never blocks. Verified: pipeline reached PLAYING at +29 ms and stayed live all run.</td><td class="num">0 timeouts</td></tr>
+</table>
+
+<div class="box warn">
+<span class="box-title">Snapshot implementation rules</span>
+<p><strong>1.</strong> With <code>drop=true</code> + <code>max-buffers=2</code> on the appsink, subscribe by polling <code>try_pull_sample</code> with a zero timeout from the main loop — never block a callback. If you ever wire snapshots to an HTTP worker thread, that thread cannot run a main-loop poll: give it its own mutex-protected "latest JPEG" slot that the main loop fills.</p>
+<p><strong>2.</strong> The frame you get is ≤ 1 frame period + encode time <em>old</em> relative to "now" — fine for security snapshots, wrong for measurement. Don't timestamp physics experiments with it.</p>
+</div>
+
+<h2>Applications you can already write</h2>
+
+<table>
+<tr><th>Requirement</th><th>What you now know how to build</th></tr>
+<tr><td>Start/stop recording from the API</td><td>attach/detach branch; EOS-drain; probe for confirmation</td></tr>
+<tr><td>Files must be playable after a crash</td><td>use <code>faststart=true</code> (moov at front, rewritten during recording) or accept "no moov = lost recording" semantics — but then you MUST shut down recorders gracefully before exit</td></tr>
+<tr><td>Last N seconds before motion ("pre-roll")</td><td>same branch, but build it <em>before</em> the trigger with an unlinked tee pad; link on trigger — the queue is your 1 s time machine</td></tr>
+<tr><td>Snapshot endpoint</td><td>valve + jpegenc + async=false appsink + zero-timeout pull</td></tr>
+</table>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">1. Your recorder pushes EOS into the branch and waits 30 s on the bus for an EOS message. The file is already on disk, complete. Why no message?</p>
+  <button class="quiz-opt">mp4mux does not forward EOS, so the sink never sees it</button>
+  <button class="quiz-opt">The parent bin consumes child EOS and aggregates only when all its sinks finish — one never does</button>
+  <button class="quiz-opt">The bus requires a running main loop to receive EOS messages</button>
+  <p class="quiz-explain">The probe proved the EOS event reached the filesink in ~1 ms and moov was already written. The message is eaten by bin EOS aggregation; the always-on RTSP branch means the aggregate never completes.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. What is the reliable "the recording file is complete" signal from inside the pipeline?</p>
+  <button class="quiz-opt">The queue's level drops to zero</button>
+  <button class="quiz-opt">The filesink posts its EOS message on the pipeline bus</button>
+  <button class="quiz-opt">A downstream EOS pad probe fires on the filesink's sink pad</button>
+  <p class="quiz-explain">mp4mux finalizes during EOS handling and only then forwards the event. The event passing the sink pad probe is a happens-after guarantee that moov is on disk. The message may never come; the event always does.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">3. A snapshot branch keeps a valve start-closed plus <code>appsink async=false</code>. What does that buy you?</p>
+  <button class="quiz-opt">The pipeline still reaches PLAYING — no preroll wait on a branch that has no data</button>
+  <button class="quiz-opt">The valve cannot deadlock the tee because it disables the queue</button>
+  <button class="quiz-opt">jpegenc encodes a frame continuously so snapshots are always instant</button>
+  <p class="quiz-explain">Lesson 4's fix, reused: a starved branch would otherwise hold the whole pipeline in preroll. async=false makes that sink "ready anyway", the valve drops frames before the encoder, and the tee stays unblocked.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p><a href="https://gstreamer.freedesktop.org/documentation/isomp4/mp4mux.html">mp4mux</a> — read the <code>faststart</code>, <code>faststart-file</code> and <code>reserved-moov-update-period</code> properties with the crash experiment in mind. Then <a href="https://gstreamer.freedesktop.org/documentation/gstcoreelement/pad-probe.html">pad probes</a> — you'll use them again for the recorder-confirm path in the server.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Recording service design: <code>Recorder</code> = the inverse of <code>ProfileHost</code> — attach/detach a branch from the source tee. Write it once your <code>ProfileHost</code> exists (they share the ghost-pad/mid-run-join crafts).</li>
+  <li>Or snapshots first — they're smaller: one always-on branch, one valve, one JPEG pull. Wire it to the web API's snapshot endpoint when that lands.</li>
+  <li>Decide and document the shutdown contract: on process exit, all active recorders get unlink + EOS + ≤2.5 s drain, <em>then</em> the pipeline goes NULL. Without that, every forced exit eats a recording.</li>
+</ol>
+
+<div class="ask-teacher">
+When you bring a Recorder or Snapshot design, ask for the trap-audit: who owns the ghost pad ref, when is <code>set_state</code> allowed to run relative to the tee lock, is the probe callback safe on the streaming thread, and what happens if a second record is requested while one is draining.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0006-appsink-appsrc-bridge.html">Lesson 6 — The appsrc Bridge</a></span>
+  <span>Next: <a href="0008-source-death-and-rebuild.html">Lesson 8 — When the Camera Dies</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

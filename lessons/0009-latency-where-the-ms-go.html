@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 9 — Where the Milliseconds Go (and a Story About Stale Numbers)</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0009</p>
+<h1>Where the Milliseconds Go (and a Story About Stale Numbers)</h1>
+<p class="subtitle">Tune-in time is a number your platform will be judged on — so it needs a measurement, not a memory. This lesson builds the metric, takes it, and retracts an earlier number that didn't survive contact with the final binaries.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> The architecture doc promises "100–300 ms settle". After this lesson you'll have your own reproducible tune-in metric and the first real numbers for all three server topologies you've built.
+</div>
+
+<h2>The metric: first frame, from client's PLAY to pixels arriving</h2>
+
+<p><code>labs/lab5-rtsp-client.cpp</code> now stamps <code>start_us</code> just before <code>set_state(PLAYING)</code> and records the first <code>new-sample</code> delay. That single number contains everything the user experiences as "tune-in": RTSP connect (DESCRIBE/SETUP/PLAY), server media prepare, first RTP delivery, jitter buffer (none — <code>latency=0</code>), depay.</p>
+
+<pre><code>./lab5client rtsp://127.0.0.1:8554/hd 5
+[client] ... samples=148 over 5.0s => 29.6 frames/s | first frame at 99 ms</code></pre>
+
+<h2>The measurement: same client, three servers (<code>~/cam-recon/latency-test.sh</code>)</h2>
+
+<table>
+<tr><th>Server topology</th><th>First frame</th><th>Throughput</th></tr>
+<tr><td><strong>lab5</strong> — media pipeline contains its own <code>videotestsrc→x264</code>, no bridge, first client</td><td class="num">99 ms</td><td class="num">29.6 fps</td></tr>
+<tr><td><strong>lab5</strong> — second consecutive client, same server</td><td class="num">87 ms</td><td class="num">29.6 fps</td></tr>
+<tr><td><strong>lab6</strong> — appsrc bridge media, pre-seeded with latest frame before client's PLAY completes</td><td class="num">31 ms</td><td class="num">30.1 fps</td></tr>
+<tr><td><strong>lab8</strong> — bridge session 2 with pre-seed (Lesson 8), counting from client start</td><td class="num">~instant (11 samples by +505 ms)</td><td class="num">30 fps</td></tr>
+</table>
+
+<div class="box rule">
+<span class="box-title">What these numbers say</span>
+<p><strong>The bridge architecture is not the latency cost — it's the latency win.</strong> Pre-seeded appsrc media tunes in fastest (31 ms) because the media already has caps + a frame when the client's PLAY arrives. The plain <code>videotestsrc</code> media needs ~90–100 ms of its own startup before the first RTP packet leaves.</p>
+<p><strong>All topologies are comfortably inside the doc's 100–300 ms promise</strong> on loopback, TCP, with <code>latency=0</code>. Whatever the platform's real network adds, it adds the same to all three.</p>
+</div>
+
+<div class="box warn">
+<span class="box-title">Retraction: the "~2 s viewer-join" from Lesson 6's debug run</span>
+<p>During Lesson 6 development, an instrumented debug run showed two ~1 s waits inside <code>gst_rtsp_media_prepare</code> for appsrc media. That number went into notes and the first version of Lesson 6. <strong>It does not reproduce with the final binaries</strong> — re-measured today: 31 ms. The old figure most likely belonged to the debug build's instrumentation or a transient; the honest record is: <em>observed once, never reproduced, retracted</em>.</p>
+<p>Two habits this incident should leave behind: <strong>(1)</strong> quote a number only with the binary you'll ship it in, and <strong>(2)</strong> when a claim matters to a promise (tune-in!), re-run the experiment before the review — even if it "was measured once".</p>
+</div>
+
+<h2>What we did not measure (be honest about scope)</h2>
+<ul>
+  <li><strong>UDP vs TCP transport.</strong> All clients used <code>protocols=tcp</code>. UDP typically trims a little latency (no retransmit ordering) at the cost of loss artifacts — worth one run before the review.</li>
+  <li><strong>Client-side decode.</strong> Clients count <code>h264parse</code> output, not decoded frames. On a real Qt viewer add <code>avdec_h264</code> and the decode cost shows up in tune-in again.</li>
+  <li><strong>Remote network path.</strong> Loopback only; no packet loss, no MTU games.</li>
+  <li><strong>Snapshot latency under load.</strong> 33–38 ms (Lesson 7) was measured on an idle system.</li>
+</ul>
+
+<h2>Making this a repo metric</h2>
+<table>
+<tr><th>Where</th><th>What to instrument</th></tr>
+<tr><td><code>RtspProfileServer</code></td><td>log <code>media-configure → prepared → PLAYING</code> deltas (the server side of tune-in)</td></tr>
+<tr><td>Client smoke test</td><td><code>lab5client</code>'s first-frame line is your end-to-end metric — keep it in CI on loopback</td></tr>
+<tr><td>Status API</td><td>publish last-measured tune-in per mount; alarm if it exceeds the promise</td></tr>
+</table>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">1. Which server topology tuned in fastest, and why is that not a coincidence?</p>
+  <button class="quiz-opt">Pre-seeded appsrc media — caps and a frame exist before the client's PLAY completes</button>
+  <button class="quiz-opt">videotestsrc media — test sources are optimized for immediate first output</button>
+  <button class="quiz-opt">All three tied — RTSP handshake dominates every topology equally</button>
+  <p class="quiz-explain">31 ms vs ~90–100 ms. The bridge's pre-seed isn't just cosmetic: it makes the media "warm" before negotiation finishes. The handshake is not the dominant term — server-side media readiness is.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. The earlier ~2 s tune-in number from the debug run turned out to be wrong. What exactly is the lesson?</p>
+  <button class="quiz-opt">Debug builds of gst-rtsp-server are always 60× slower, so never measure debug</button>
+  <button class="quiz-opt">Media prepare times are random, so tune-in cannot be measured reliably</button>
+  <button class="quiz-opt">Re-measure with the artifacts you ship before a number informs a promise</button>
+  <p class="quiz-explain">The bug was process, not physics: a number measured once under different conditions was carried as fact. Today's numbers reproduce across runs; the old one never did.</p>
+</div>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">3. Your client counts <code>h264parse</code> output. What does your "first frame at X ms" NOT include?</p>
+  <button class="quiz-opt">The RTSP DESCRIBE/SETUP/PLAY round trips</button>
+  <button class="quiz-opt">Client-side decoding — a real viewer adds avdec_h264 cost</button>
+  <button class="quiz-opt">The server's media prepare time</button>
+  <p class="quiz-explain">The metric spans PLAY→depaid access units. Decode is downstream of the counter; on a Qt viewer, add the decoder and re-measure before promising UI-visible tune-in.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p><a href="https://gstreamer.freedesktop.org/documentation/rtsp/rtspsrc.html">rtspsrc</a> — the <code>latency</code>, <code>buffer-mode</code> and <code>drop-on-latency</code> properties define the client's latency/loss trade-off. Then <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/rtsp-media.html">GstRTSPMedia</a> again, reading for the prepare lifecycle you're now measuring.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>When clients and server are wired, run the same experiment over the real viewer (Qt) and over UDP — bring both numbers to the review.</li>
+  <li>Keep <code>lab5client</code>(+ timing) as the loopback smoke test binary; it costs 20 lines and settles every future "it feels slow" debate.</li>
+  <li>Log the three server-side deltas per session in <code>RtspProfileServer</code> — when tune-in regresses someday, you'll want to see <em>which</em> phase grew.</li>
+</ol>
+
+<div class="ask-teacher">
+Next natural milestone: your <code>ProfileBin</code>/<code>ProfileHost</code>/<code>RtspProfileServer</code> drafts for the trap-audit review — after that, the final wiring lesson (Application + <code>--drop</code> CLI) writes itself.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0008-source-death-and-rebuild.html">Lesson 8 — When the Camera Dies</a></span>
+  <span>Next: Lesson 10 — Wiring It All Into Application <span class="small">(after your three files land)</span></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

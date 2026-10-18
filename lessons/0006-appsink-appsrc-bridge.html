@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 6 — The appsrc Bridge: Viewers Drive the Valves</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0006</p>
+<h1>The appsrc Bridge: Viewers Drive the Valves</h1>
+<p class="subtitle">Your ProfileHost produces H.264 into an appsink. The RTSP factory wants an appsrc. Ten lines of glue connect them — and two traps cost us a full debugging session so they don't cost you one.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> This is <code>server/RtspProfileServer</code>, completely designed: factories whose launch is just <code>appsrc ! h264parse ! rtph264pay</code>, wired to your <code>ProfileHost</code> appsinks on <code>media-configure</code>, unwired on <code>unprepared</code>. Viewer arrival opens the profile's valve; the last viewer leaving closes it. Your Phase 2 architecture, running.
+</div>
+
+<h2>Concept: two islands, one bridge</h2>
+
+<pre class="diagram">ProfileHost island                                RTSP island (per media session)
+                                                   ( appsrc name=vsrc ! h264parse ! rtph264pay name=pay0 )
+x264enc ─▶ appsink ════ bridge ════▶ appsrc
+            ("new-sample" pulls a sample)  (push, session re-stamped)
+</pre>
+
+<p>The two islands know nothing about each other. The glue is event-driven:</p>
+
+<table>
+<tr><th>Event</th><th>Who hears it</th><th>What the bridge does</th></tr>
+<tr><td>A viewer requests the mount</td><td>factory <code>media-configure</code></td><td>grab the new media's <code>vsrc</code>, store it, open the valve</td></tr>
+<tr><td>Every encoded frame</td><td>appsink <code>new-sample</code></td><td>copy buffer, strip timestamps, push into the wired appsrc</td></tr>
+<tr><td>The last viewer leaves</td><td>media <code>unprepared</code></td><td>drop the appsrc reference, close the valve</td></tr>
+</table>
+
+<p>Because these three events run on different threads (RTSP main loop vs. each appsink's streaming thread), the pointer hand-off needs a mutex — the same pattern you will copy into <code>RtspProfileServer</code>.</p>
+
+<h2>Trap 1 — the valve startup rule, applied</h2>
+<p>Lesson 2's rule, made concrete: the lab starts with both valves <em>open</em>, waits for <code>gst_element_get_state()</code> to confirm PLAYING, <em>then</em> closes them ("idle") until viewers arrive. Cost: exactly the frames that pass during that window.</p>
+<pre><code>[bridge] pipeline PLAYING
+[bridge] idle: both valves closed      <- ~2 frames per profile escaped before the drop
+[status] hd session=0 pushed=0 dropped=2 valve_drop=yes wired=no</code></pre>
+
+<h2>Trap 2 — the timestamp trap (why our first run streamed 0 fps)</h2>
+
+<p>First working bridge, first test: server says it pushed 179 frames; every client received <b>zero</b>.</p>
+
+<pre><code>[client] rtsp://127.0.0.1:8554/hd: samples=0 over 6.0s => 0.0 frames/s
+[status] hd session=1 pushed=39 ... pushfail=0   <- appsrc accepted everything happily</code></pre>
+
+<p>The cause: we pushed samples carrying the <em>producer's</em> timestamps (the ProfileHost pipeline's running time — its own clock, its own zero). The RTSP media session is a brand-new pipeline; its RTP clock slaving (rtspsrc arrives in <code>buffer-mode=slave</code>) aligns the client to the stream's timeline — and a foreign timestamp baseline never converges. No frames render, no error is raised anywhere.</p>
+
+<div class="box rule">
+<span class="box-title">The relay fix — restamp at the appsrc boundary</span>
+<p>In <code>new-sample</code>: copy the buffer, clear <code>PTS</code>/<code>DTS</code>/<code>duration</code>, set the appsrc caps once from the sample's caps, and add <code>do-timestamp=true</code> to the appsrc launch. The media then stamps each frame <em>on arrival</em> — the correct semantics for a live relay: "this frame is happening now", not "this frame was frame #4,382 of another pipeline".</p>
+<pre><code>GstBuffer *buffer = gst_buffer_copy(gst_sample_get_buffer(sample));
+GST_BUFFER_PTS(buffer) = GST_BUFFER_DTS(buffer) = GST_BUFFER_DURATION(buffer) = GST_CLOCK_TIME_NONE;
+/* once per session: */ gst_app_src_set_caps(appsrc, gst_sample_get_caps(sample));
+gst_app_src_push_buffer(appsrc, buffer);   /* takes ownership */</code></pre>
+</div>
+
+<p>Before → after, same lab, same client, only the restamp changed:</p>
+
+<pre><code>before:  hd samples=0     sd samples=0     hd(session 2) samples=0
+after:   hd samples=151 / 6.0s = 25.2 fps
+         sd samples=137 / 6.0s = 22.8 fps
+         hd samples= 91 / 4.0s = 22.8 fps   (session 2, after full teardown + reconnect)</code></pre>
+
+<h2>The full measured lifecycle</h2>
+
+<pre><code>[t=17839ms] [hd] viewer arrived -> session 1: valve OPEN
+[t=18787ms] [hd] media prepared                 (+948 ms)
+[t=19758ms] [hd] media new-state: 4             (PLAYING, +971 ms)
+... hd pushes 179 frames over 6 s (a clean 30 fps) ...
+[t=23813ms] [hd] viewers gone -> valve CLOSED (pushed 179)
+[t=26853ms] [hd] viewer arrived -> session 2: valve OPEN     <- full rebuild, still works
+[t=27825ms] [hd] media new-state: 4
+[t=30841ms] [hd] viewers gone -> valve CLOSED (pushed 119)</code></pre>
+
+<table>
+<tr><th>Observation</th><th>Numbers</th></tr>
+<tr><td><strong>The valve lifecycle is exactly what the architecture wanted.</strong> Idle = valve closed, encoder stopped. Viewer = open + stream. Last viewer gone = closed again. The second hd session (full media teardown in between) worked identically.</td><td class="num">2 sessions, 3 connect cycles</td></tr>
+<tr><td><strong>Viewer-join was measured at ~2 s in the instrumented debug run</strong> — two ~1 s waits inside <code>gst_rtsp_media_prepare</code> for appsrc-fed live media. <em>Later re-measurement with the final binaries: 31 ms first frame (Lesson 9). The ~2 s did not reproduce; treat it as a red herring of that debug build.</em></td><td class="num">+948 ms, +971 ms → later: 31 ms</td></tr>
+<tr><td><strong>The join cost shows up as frame loss, not delay.</strong> Producer pushed 179 frames during hd's 6 s session; client counted 151 — the ~1 s of frames pushed before the client's pipeline was rendering either overflowed the appsrc queue or arrived as a startup burst.</td><td class="num">179 pushed vs 151 counted</td></tr>
+<tr><td><strong>Idle branches stay cheap.</strong> With the valve closed, the drop happens at the valve, before the encoder — the appsink sees nothing, the bridge's drop counter stops moving. Idle cost = queue+valve forwarding only.</td><td class="num">dropped stays flat when idle</td></tr>
+</table>
+
+<div class="box warn">
+<span class="box-title">Two facts to carry into RtspProfileServer</span>
+<p><strong>1.</strong> The ~2 s media-prepare cost came from one instrumented debug run and never reproduced with the final binaries (Lesson 9 re-measured 31 ms first frame). Keep the lesson: measure with the artifacts you will actually ship, and re-measure before you quote a number to anyone.</p>
+<p><strong>2.</strong> Never push producer timestamps across the bridge. If a future refactor "optimizes away" the buffer copy, this bug comes back — with zero errors and zero frames, which is a terrible debugging experience twice.</p>
+</div>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">1. The bridge pushed with the producer's timestamps. Why did clients render nothing — with no errors anywhere?</p>
+  <button class="quiz-opt">The appsrc rejected them silently because the caps were not set yet</button>
+  <button class="quiz-opt">The payloader dropped every frame whose duration field was unset</button>
+  <button class="quiz-opt">The media session's clock slaving cannot align to a foreign timeline</button>
+  <p class="quiz-explain">The RTP session slaved to the producer pipeline's running time — a clock that never maps to the media session's own timeline. Every push succeeded; nothing ever rendered. Restamp at arrival fixes it.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">2. Where must the appsink→appsrc wiring happen so reconnects keep working?</p>
+  <button class="quiz-opt">On every media-configure, because each session builds new media</button>
+  <button class="quiz-opt">Once at startup, because the media pipeline is created only once</button>
+  <button class="quiz-opt">On every new-sample, because the appsrc target can change anytime</button>
+  <p class="quiz-explain">Lesson 5 showed media is destroyed when viewers leave and rebuilt on return (<code>bin2</code>). The bridge must re-wire the fresh <code>vsrc</code> each time — and drop the stale pointer on <code>unprepared</code>.</p>
+</div>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">3. Both viewers leave a profile. What should the bridge do, and what does it cost while idle?</p>
+  <button class="quiz-opt">Keep pushing — cost is one idle encoder per unwatched profile</button>
+  <button class="quiz-opt">Close the valve — cost is only the queue/valve drop path</button>
+  <button class="quiz-opt">Set the media to NULL — cost is one stopped pipeline per mount</button>
+  <p class="quiz-explain">Measured: valve closed on <code>unprepared</code>; frames die at the valve before the encoder, and the media itself was already torn down by the server. Idle profiles cost almost nothing — which is exactly the lazy-profile design the architecture asked for.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p><a href="https://gstreamer.freedesktop.org/documentation/app/appsrc.html">GstAppSrc</a> for <code>do-timestamp</code>, <code>is-live</code>, <code>block</code> and queue limits — you now have opinions about all four. Then re-read <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/rtsp-media.html">GstRTSPMedia</a> with the lifecycle you just observed in mind.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Still blocked on <code>ProfileBin</code>/<code>ProfileHost</code> from Lessons 3–4 — that is the producer island this lesson bridges from. Land them first, with the review.</li>
+  <li>Then write <code>server/RtspProfileServer</code> using <code>labs/lab6-rtsp-bridge.cpp</code> as the reference: per-profile factory with the appsrc launch string, the mutex-guarded wire/unwire, viewer-driven valves, and the restamp rule. One deviation from the lab: your producer is pre-built and runs forever; only the RTSP media comes and goes.</li>
+  <li>Record your own viewer-join measurement with the final binaries against the doc's 100–300 ms settle claim — our ~2 s debug-run number did not survive re-measurement (Lesson 9), so measure before you promise.</li>
+</ol>
+
+<div class="ask-teacher">
+This is the natural review point: ProfileBin + ProfileHost + a draft RtspProfileServer is the whole risky surface of Phase 2. Bring all three and ask for the trap-audit (valve construction, ghost pad ownership, queue placement, timestamp restamp, mutex coverage).
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0005-rtsp-media-factories.html">Lesson 5 — RTSP: Mount, Factory, Media</a></span>
+  <span>Next: <a href="0007-recording-and-snapshots.html">Lesson 7 — Recording &amp; Snapshots</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

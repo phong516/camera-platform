@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 8 — When the Camera Dies: EOS, Silence, Watchdog, Rebuild</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0008</p>
+<h1>When the Camera Dies: EOS, Silence, Watchdog, Rebuild</h1>
+<p class="subtitle">A camera can end its stream two ways: politely (EOS) or by just stopping (crash). Viewers experience them very differently — one is a clean goodbye, the other is an invisible freeze that RTSP will never tell you about.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> This is <code>VideoPipeline</code>'s death and rebuild path, and it protects <code>RtspProfileServer</code> sessions: a source failure must NOT cascade into every viewer losing their session. The bridge keeps the appsrc alive and the watchdog tells the app the truth.
+</div>
+
+<h2>Concept: two deaths, two signatures</h2>
+
+<table>
+<tr><th></th><th>Graceful end (EOS)</th><th>Crash / unplug</th></tr>
+<tr><td>What happens</td><td>Producer pipeline pushes EOS</td><td>Samples simply stop. No event. No error.</td></tr>
+<tr><td>What viewers see</td><td>Clean stream end (EOS through the RTSP session)</td><td><strong>Frozen last frame, forever.</strong> RTSP keeps the session alive happily.</td></tr>
+<tr><td>How the app learns</td><td><code>appsink</code> "eos" signal</td><td>Nothing built-in — you must poll silence (a watchdog)</td></tr>
+<tr><td>What the bridge must do</td><td><code>gst_app_src_end_of_stream()</code> — forward the goodbye</td><td>Declare dead, rebuild producer, keep the media session</td></tr>
+</table>
+
+<p>Both paths end the same way in your app: tear down the producer generation, build a new one, re-feed the bridge. The viewer-facing difference is everything.</p>
+
+<h2>The lab: three producer generations, two clients (<code>labs/lab8-rtsp-recover.cpp</code>)</h2>
+
+<pre class="diagram">gen1 (90 frames)          gen2 (crash @ 10.6s)         gen3 (90 frames)
+  │ EOS @ 4.65s              │ no EOS, killed             │ EOS @ 15.5s
+  ▼                          ▼                            ▼
+bridge appsink ─▶ restamp ─▶ appsrc ─▶ RTSP session ─▶ client stays connected the whole time</pre>
+
+<p>Schedule: gen1 runs out of buffers (graceful), gen2 is SIGKILLed silently at its 5th second, gen3 starts 1.9 s later — all while clients stay connected to the same mount.</p>
+
+<h2>Measured: the whole story in one log</h2>
+
+<pre><code>[+  529ms] viewer arrived -> session 1, appsrc wired (gen=0)
+[+ 1656ms] producer gen=1 started (90 buffers)
+[+ 4652ms] producer gen=1 hit EOS after 90 samples
+[+ 4652ms] forwarded EOS to viewers (appsrc session 1)      &lt;- same millisecond
+[+ 4859ms] viewer left -> session 1 done (pushed 90)        &lt;- client got EOS, hung up cleanly
+[+ 5534ms] pre-seeded new appsrc with latest frame          &lt;- session 2, instant first frame
+[+ 5657ms] producer gen=2 started (100000 buffers)
+[+10649ms] SIMULATING SOURCE CRASH: killing producer gen=2 without EOS
+[+12273ms] WATCHDOG: SOURCE DEAD (gen=2) - no samples for 1655ms, no EOS.
+           Viewers are frozen but still connected.
+[+12505ms] producer gen=3 started (90 buffers)
+[+15501ms] producer gen=3 hit EOS after 90 samples
+[+15501ms] forwarded EOS to viewers (appsrc session 2)
+[+15707ms] viewer left -> session 2 done (pushed 239)</code></pre>
+
+<p>And the same seconds from inside client 2 — this is the part that matters:</p>
+
+<pre><code>[+ 5011ms] samples=147          &lt;- gen2 running, 30 fps
+[+ 5512ms] samples=150          ⎫
+[+ 6013ms] samples=150          ⎪ no error. no EOS. no hint.
+[+ 7014ms] samples=150          ⎬ 2.5 s of frozen counter, invisible to RTSP
+[+ 7514ms] samples=165          ⎭ &lt;- gen3's samples resume on the SAME session
+...
+[+ 9990ms] EOS received after 240 samples    &lt;- 150 + 90 exactly</code></pre>
+
+<table>
+<tr><th>Observation</th><th>Numbers</th></tr>
+<tr><td><strong>EOS forwarding is instant and exact.</strong> Producer EOS at 4652 ms; client 1 received EOS within the same second; pushed-count (90) matched the producer's buffer count exactly.</td><td class="num">0 frame loss</td></tr>
+<tr><td><strong>The crash was invisible to the client.</strong> Counter frozen at 150 for 2.5 s — <code>rtspsrc</code> raised nothing. If the app didn't watch samples, the UI would say "LIVE" forever.</td><td class="num">150 → 150 for 2.5 s</td></tr>
+<tr><td><strong>The watchdog detects it in 1.6–1.7 s</strong> (threshold 1.5 s of silence, polled at 250 ms) — and only when a viewer is actually wired and no EOS arrived: silence while idle is normal, silence while streaming is death.</td><td class="num">1655 ms silence</td></tr>
+<tr><td><strong>Rebuild reuses the live session.</strong> gen3 fed the same appsrc; client 2 never reconnected and its counter continued from where it froze.</td><td class="num">resume, no reconnect</td></tr>
+<tr><td><strong>Exact accounting:</strong> 240 client samples = 150 (gen2) + 90 (gen3); the pre-seed frame explains pushed=239 vs client=240.</td><td class="num">239+1 = 240</td></tr>
+</table>
+
+<div class="box rule">
+<span class="box-title">The four rules of source recovery</span>
+<p><strong>1. Forward EOS when it happens</strong> — <code>appsink "eos"</code> → <code>gst_app_src_end_of_stream(appsrc)</code>. Viewers get a clean goodbye instead of a freeze that looks like a bug.</p>
+<p><strong>2. Watchdog the silence, not the clock</strong> — sample arrival gap &gt; threshold, valve open, no EOS → declare dead. Poll from the main loop; never from a streaming thread.</p>
+<p><strong>3. Never tear down the media on source loss.</strong> All viewers would drop and re-do tune-in. Keep the appsrc session; only the producer generation changes. Note <code>end_of_stream</code> is one-way: an EOS'd appsrc cannot accept new data — that's why the EOS case naturally ends the session (client hangs up), while the crash case reuses it.</p>
+<p><strong>4. Seed new sessions with the latest frame.</strong> The bridge keeps one newest buffer; new appsrc gets caps + that frame immediately. Measured: client 2's counter was already at 11 samples by 505 ms after connect.</p>
+</div>
+
+<div class="box warn">
+<span class="box-title">Two subtleties we hit so you don't have to</span>
+<p><strong>Restart the encoder with a keyframe.</strong> Fresh <code>x264enc</code> starts with an IDR frame, so a decoding client resumes cleanly. If you ever restart mid-GOP (e.g. by unlinking/relinking a raw branch), decoders show garbage until the next IDR — that's why <code>key-int-max</code> matters in the architecture doc.</p>
+<p><strong>Give the rebuild a watchdog grace period.</strong> In the first run, the watchdog re-fired 16 ms after gen3 started — before its first sample arrived. Reset the silence clock when a generation starts, not only when samples flow (our first run showed the false positive; the fixed version doesn't).</p>
+</div>
+
+<h2>Mapping to your repo</h2>
+<table>
+<tr><th>Lab piece</th><th>Repo counterpart</th></tr>
+<tr><td><code>produce_start()</code> per generation</td><td><code>VideoPipeline::start()</code> — v4l2src replaces videotestsrc</td></tr>
+<tr><td>Watchdog on sample gap</td><td>source-state monitor → publish "source_dead" in the status model</td></tr>
+<tr><td>Bridge keeps appsrc/session</td><td><code>RtspProfileServer</code> keeps media; only profiles' upstream producer swaps</td></tr>
+<tr><td>pre-seed latest frame</td><td>bridge cache, one buffer, replaced under the same mutex</td></tr>
+</table>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">1. The camera process segfaults. Your RTSP client shows what?</p>
+  <button class="quiz-opt">A connection error from rtspsrc within a few seconds</button>
+  <button class="quiz-opt">An EOS event, followed by the session closing</button>
+  <button class="quiz-opt">The last frame held, counter frozen, silence — possibly forever</button>
+  <p class="quiz-explain">Measured: RTSP noticed nothing for 2.5 s and would notice nothing ever. Only a sample-arrival watchdog distinguishes "idle" from "dead".</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">2. When the watchdog fires, why should the media session survive?</p>
+  <button class="quiz-opt">Viewers keep their connection, counters resume with the new producer — no re-tune-in</button>
+  <button class="quiz-opt">Because gst-rtsp-server cannot destroy media while a watchdog exists</button>
+  <button class="quiz-opt">Because appsrc rejects media teardown while buffers are pending</button>
+  <p class="quiz-explain">Measured: gen3's frames continued the same client counter seamlessly. Tearing down media would force every viewer through DESCRIBE/SETUP/PLAY again — the exact churn the bridge design avoids.</p>
+</div>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">3. Why is <code>gst_app_src_end_of_stream()</code> a one-way door for that session?</p>
+  <button class="quiz-opt">It flushes the appsink's queue permanently in both directions</button>
+  <button class="quiz-opt">The session enters EOS; new pushes are refused — a restart needs fresh media</button>
+  <button class="quiz-opt">It only works once per process, so the first EOS burns all future sessions</button>
+  <p class="quiz-explain">EOS is terminal for that appsrc. In the labs, the EOS case ends with the client hanging up (session dies naturally); the crash case keeps its session because no EOS was ever sent.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p><a href="https://gstreamer.freedesktop.org/documentation/app/appsrc.html">GstAppSrc</a> — this time the <code>end-of-stream</code> method and <code>block</code> semantics. Then <a href="https://gstreamer.freedesktop.org/documentation/app/appsink.html">GstAppSink</a>'s <code>eos</code> and <code>new-sample</code> signals with the two-death model in your head.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Once <code>VideoPipeline</code> exists: wire its bus EOS handling to the same "forward EOS" path — a v4l2 device that disappears usually raises an ERROR, not EOS, so decide the mapping (ERROR → treat as crash: watchdog only; EOS → forward).</li>
+  <li>Define the source-state enum for the app: <code>STREAMING / SOURCE_DEAD / REBUILDING</code> — and expose it in the status API so the UI can say "reconnecting camera" instead of pretending everything's fine.</li>
+  <li>When you write the rebuild path, ask for the review: generation lifecycle, watchdog grace, mutex coverage between producer threads and the RTSP main loop.</li>
+</ol>
+
+<div class="ask-teacher">
+Bring your <code>VideoPipeline</code> error/EOS handling when it exists — the interesting question is which v4l2 errors are "retry the device" vs "rebuild the pipeline", and this lab's generation pattern is the skeleton for both.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0007-recording-and-snapshots.html">Lesson 7 — Recording &amp; Snapshots</a></span>
+  <span>Next: <a href="0009-latency-where-the-ms-go.html">Lesson 9 — Where the Milliseconds Go</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

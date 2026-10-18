@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 5 — RTSP: Mount, Factory, Media</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0005</p>
+<h1>RTSP: Mount, Factory, Media</h1>
+<p class="subtitle">Your profile bins were the hard part. The server is four objects and ~60 lines — measured end to end: two mounts streaming at 29.7 fps each, viewers arriving and leaving cleanly.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> This becomes <code>server/RtspProfileServer</code>: one port (8554), one mount per profile (<code>/hd</code>, <code>/sd</code>, …), <code>shared</code> factories so N viewers of the same profile cost one encoder. The launch pipelines here still contain their own <code>videotestsrc</code>; Lesson 6 replaces that source with your <code>ProfileHost</code> via <code>appsrc</code> — that is the bridge.
+</div>
+
+<h2>Concept: the three-object model</h2>
+
+<p><code>gst-rtsp-server</code> is a library, not a plugin. You write a normal C program that fills three roles:</p>
+
+<pre class="diagram">GstRTSPServer          owns the TCP port (service "8554"), accepts clients        signal: client-connected
+   │
+   └─ GstRTSPMountPoints     the URL → factory table            /hd → factory A, /sd → factory B
+         │
+         └─ GstRTSPMediaFactory     a pipeline TEMPLATE (launch string)
+               │                     parsed on demand, per viewer session
+               └─ GstRTSPMedia      the live media pipeline (one per session, shared among
+                                    concurrent viewers of the same mount)     signals: prepared, unprepared</pre>
+
+<p>The factory is lazy by construction: nothing is encoded until a client asks for a mount. When a client <code>DESCRIBE</code>s <code>/hd</code>, the factory parses its launch string, builds the pipeline, attaches RTP payloaders, and starts it — <em>on demand</em>. That is exactly the "lazy profile" behavior your architecture doc wants, for free.</p>
+
+<h3>The launch string has rules</h3>
+
+<pre><code>( videotestsrc is-live=true pattern=smpte ! videoscale !
+  video/x-raw,width=1280,height=720,framerate=30/1 !
+  x264enc speed-preset=ultrafast tune=zerolatency key-int-max=30 bitrate=2500 !
+  rtph264pay name=pay0 pt=96 config-interval=1 )</code></pre>
+
+<ul>
+  <li>The whole thing is wrapped in <code>( ... )</code> — it is one pipeline the factory builds and manages.</li>
+  <li>The payloader <strong>must be named</strong> <code>pay0</code> (stream 0). A second stream would be <code>pay1</code>.</li>
+  <li>The source should be <code>is-live=true</code> — a live source returns frames immediately, so the first client gets video without waiting for a preroll that cannot happen.</li>
+  <li><code>config-interval=1</code> re-sends SPS/PPS every second, so a client that joins mid-stream can decode from the next keyframe. With real cameras you want this (and a sane <code>key-int-max</code>); without it, every new viewer waits up to a GOP for usable video.</li>
+</ul>
+
+<h2>Lab: two mounts, real clients</h2>
+
+<p>Full source: <code>labs/lab5-rtsp-server.cpp</code> (the server) and <code>labs/lab5-rtsp-client.cpp</code> (a counting client you will reuse).</p>
+
+<pre><code>g++ -Wall -O2 -o lab5 labs/lab5-rtsp-server.cpp \
+    $(pkg-config --cflags --libs gstreamer-rtsp-server-1.0 gstreamer-rtsp-1.0 gstreamer-1.0)
+g++ -Wall -O2 -o lab5client labs/lab5-rtsp-client.cpp \
+    $(pkg-config --cflags --libs gstreamer-app-1.0 gstreamer-1.0)</code></pre>
+
+<p>Two <code>pkg-config</code> packages for the server — <code>gstreamer-rtsp-1.0</code> is separate and needed the moment you touch <code>GstRTSPConnection</code> (we found out via a linker error, naturally). The client counts samples after <code>rtph264depay ! h264parse</code>:</p>
+
+<pre><code>rtspsrc location=... latency=0 protocols=tcp ! rtph264depay ! h264parse !
+appsink emit-signals=true sync=false name=sink</code></pre>
+
+<p>Server log (this is your side of the wire, verbatim):</p>
+
+<pre><code>[server] ready: rtsp://127.0.0.1:8554/hd and /sd
+[server] client connected from 127.0.0.1:33224
+[server] media-configure for /hd
+[server] media prepared for /hd
+[server] client connected from 127.0.0.1:33240
+[server] media-configure for /sd
+[server] media prepared for /sd
+[server] media unprepared for /hd
+[server] client closed
+[server] media unprepared for /sd
+[server] client closed</code></pre>
+
+<p>Client counters (run concurrently, both for 7.0 s):</p>
+
+<pre><code>[client] rtsp://127.0.0.1:8554/hd: samples=208 over 7.0s => 29.7 frames/s
+[client] rtsp://127.0.0.1:8554/sd: samples=208 over 7.0s => 29.7 frames/s</code></pre>
+
+<div class="box warn">
+<span class="box-title">1.28 API drift — two landmines we hit</span>
+<p><strong>1.</strong> <code>gst_rtsp_server_create_main_loop()</code> no longer exists. You now create the context yourself: <code>GMainContext *ctx = g_main_context_new(); GMainLoop *loop = g_main_loop_new(ctx, FALSE); gst_rtsp_server_attach(server, ctx);</code></p>
+<p><strong>2.</strong> The factory signal is <code>media-configure</code> — not the <code>media-configured</code> you may half-remember from older examples. GObject signal names are not in headers, so check the GIR: <code>grep 'glib:signal' /usr/share/gir-1.0/GstRtspServer-1.0.gir</code>. That file is the ground truth for this exact install.</p>
+</div>
+
+<h2>What the log just taught you about media lifetimes</h2>
+
+<table>
+<tr><th>Observation</th><th>Evidence</th></tr>
+<tr><td><strong>Shared means shared among concurrent viewers.</strong> Two clients on /hd → <em>one</em> <code>media-configure</code>, one media pipeline, one x264enc. The second viewer multiplexes onto the existing stream.</td><td class="num">1 signal, 2 clients</td></tr>
+<tr><td><strong>Media dies with the last viewer.</strong> <code>unprepared</code> fires when the client side is empty; a later client triggers a brand-new <code>media-configure</code> — we saw a fresh pipeline (<code>bin2</code>) built for the reconnect.</td><td class="num">new media per session</td></tr>
+<tr><td><strong>Nothing runs between sessions.</strong> No viewers, no pipeline, no encoder — you are not paying for idle profiles.</td><td class="num">prepared → unprepared → gone</td></tr>
+</table>
+
+<div class="box rule">
+<span class="box-title">These two signals are your viewer lifecycle</span>
+<p><code>media-configure</code> (viewer arrived — wire your stream in) and <code>unprepared</code> (viewers gone — unwire). Lesson 6 hangs the valve on exactly these edges: valve open on configure, closed on unprepared. The "shared media rebuilt per session" detail is why the wiring must be re-done every time, not once at startup.</p>
+</div>
+
+<p>Wrong mount, for completeness — the client fails fast, no hang:</p>
+
+<pre><code>details, rtsp-status-code=(uint)404, rtsp-status-reason=(string)"Not\ Found";
+ERROR: pipeline doesn't want to preroll.</code></pre>
+
+<div class="box rule">
+<span class="box-title">Measured aside: bitrate is a target, not a contract</span>
+<p>Same 2500 kbps encoder setting: the <code>ball</code> test pattern (mostly static black) produced 157 kbps — x264 ABR undershoots when the scene compresses well. The <code>smpte</code> bars held 1219 kbps against a 1200 target. Your camera's real bitrate will move with the scene; budget for the ceiling, not the average.</p>
+</div>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">1. Who builds the media pipeline for a mount?</p>
+  <button class="quiz-opt">The server, one pipeline per mount at attach time</button>
+  <button class="quiz-opt">The factory, parsing its launch string on demand</button>
+  <button class="quiz-opt">The mount table, one pipeline per URL path segment</button>
+  <p class="quiz-explain">Factories are lazy: nothing is built until a client requests the mount. That is why an unwatched profile costs zero CPU.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. Two clients watch /hd on a shared factory. How many encoders run?</p>
+  <button class="quiz-opt">Two — each client session builds its own media pipeline</button>
+  <button class="quiz-opt">Zero until the second client asks for a different mount</button>
+  <button class="quiz-opt">One — both clients share a single media pipeline</button>
+  <p class="quiz-explain">Measured: two concurrent clients produced exactly one <code>media-configure</code> and one set of frames. Shared = multiplexed onto the same encoder output.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">3. All viewers leave, then one reconnects a minute later. What happens?</p>
+  <button class="quiz-opt">media-configure fires again and a fresh media is built</button>
+  <button class="quiz-opt">media-configure is skipped and the old pipeline resumes</button>
+  <button class="quiz-opt">prepared fires but media-configure never repeats itself</button>
+  <p class="quiz-explain">The media was destroyed with the last viewer; the reconnect got a new pipeline (<code>bin2</code>), not the old one. Shared only covers <em>concurrent</em> viewers.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p>Skim in this order: the <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/index.html">gst-rtsp-server index</a> for the object model, then <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/rtsp-media-factory.html">GstRTSPMediaFactory</a> for <code>set_launch</code>/<code>set_shared</code>, then <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/rtsp-media.html">GstRTSPMedia</a> for the <code>prepared</code>/<code>unprepared</code> signals you will wire in Lesson 6.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>No new repo code this time — <code>ProfileBin</code> and <code>ProfileHost</code> from Lessons 3–4 are still your next commit, and this lesson only forks the plan with facts. In your notes, record the three integration rules: <em>wiring happens per media-configure</em>, <em>shared covers concurrent viewers only</em>, <em>unknown mounts 404</em>.</li>
+  <li>Optional hands-on: run <code>./lab5</code> and open <code>rtsp://localhost:8554/hd</code> in VLC/ffplay on Windows — WSL2 forwards localhost, so your desktop player talks straight to the lab server. Watch the server log while you connect and disconnect.</li>
+  <li>Optional: break something on purpose — flip <code>set_shared</code> to FALSE and watch two clients produce two <code>media-configure</code> events (two encoders). Cheap way to feel the difference you are choosing between in <code>RtspProfileServer</code>.</li>
+</ol>
+
+<div class="ask-teacher">
+Lesson 6 is the one that touches your architecture directly (appsrc bridge, viewer-driven valves). Before it, land the ProfileBin/ProfileHost review — the bridge hangs off their appsinks, so you want that surface final first.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0004-profile-host.html">Lesson 4 — ProfileHost: Two Profiles, Zero Drama</a></span>
+  <span>Next: <a href="0006-appsink-appsrc-bridge.html">Lesson 6 — The appsrc Bridge: Viewers Drive the Valves</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
