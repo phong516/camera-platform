@@ -7,6 +7,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "common/Protocol.hpp" // proto::kControlPort - default listen port
 #include "web/HttpMessage.hpp"
 
 using HttpHandler = std::function<HttpResponse(const HttpRequest &)>;
@@ -31,11 +32,16 @@ public:
     WebServer() = default;
     ~WebServer();
 
-    bool start(std::uint16_t port = 8080);
+    bool start(std::uint16_t port = proto::kControlPort);
+
     void stop();
     bool isRunning() const;
 
-    /// Register a handler. The key is "METHOD /path", e.g. "GET /api/status".
+    /// Register a handler. The key is "METHOD /path", e.g. "GET /api/status",
+    /// built with common/Protocol.hpp rather than repeated literals.
+    /// All routes must be registered BEFORE start(): run()'s thread dispatches
+    /// against m_routes while it exists, so inserting afterwards is unguarded
+    /// shared state with no defined behaviour.
     void route(const std::string &method, const std::string &path, HttpHandler handler);
 
     /// Look up the handler for a parsed request; synthesizes 404/405 replies.

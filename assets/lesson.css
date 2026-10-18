@@ -1,0 +1,208 @@
+/* camera-platform teaching workspace - shared lesson stylesheet */
+:root {
+  --ink: #1a1a1a;
+  --ink-soft: #55524d;
+  --paper: #fdfcf9;
+  --rule: #e4e0d8;
+  --accent: #0f6a5f;
+  --accent-soft: #e7f2f0;
+  --warn: #9a3412;
+  --warn-soft: #fdf0e7;
+  --ok: #156029;
+  --ok-soft: #ecf6ee;
+  --code-bg: #f4f1ea;
+  --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --serif: "Charter", "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman", serif;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 17px; }
+
+body {
+  margin: 0 auto;
+  max-width: 46rem;
+  padding: 3.5rem 1.5rem 6rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.62;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- header ---- */
+.kicker {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 0.6rem;
+}
+h1 {
+  font-size: 2.1rem;
+  line-height: 1.18;
+  font-weight: 600;
+  margin: 0 0 0.4rem;
+  letter-spacing: -0.01em;
+}
+.subtitle {
+  font-size: 1.06rem;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 1.4rem;
+}
+.mission-strip {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 0.65rem 1rem;
+  font-size: 0.95rem;
+  margin: 0 0 2.2rem;
+}
+.mission-strip strong { color: var(--accent); }
+
+/* ---- structure ---- */
+h2 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 2.6rem 0 0.7rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  letter-spacing: -0.005em;
+}
+h3 { font-size: 1.05rem; font-weight: 600; margin: 1.6rem 0 0.4rem; }
+p { margin: 0 0 1rem; }
+ul, ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+li { margin-bottom: 0.35rem; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+pre {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  background: #23272e;
+  color: #e8e6e3;
+  padding: 0.9rem 1.1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+}
+pre code { background: none; padding: 0; color: inherit; font-size: 1em; }
+pre .c { color: #8a919c; }   /* comment */
+pre .g { color: #8fd4a8; }   /* good / expected */
+pre .w { color: #e5b567; }   /* warn */
+pre.diagram { background: none; color: var(--ink); border: 1px solid var(--rule); }
+
+/* ---- callouts ---- */
+.box {
+  border: 1px solid var(--rule);
+  border-left-width: 4px;
+  border-radius: 4px;
+  padding: 0.8rem 1rem 0.4rem;
+  margin: 0 0 1.2rem;
+  font-size: 0.95rem;
+}
+.box p:last-child, .box ul:last-child { margin-bottom: 0.6rem; }
+.box .box-title {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  display: block;
+  margin-bottom: 0.35rem;
+}
+.box.rule    { border-left-color: var(--accent); background: var(--accent-soft); }
+.box.rule .box-title    { color: var(--accent); }
+.box.warn    { border-left-color: var(--warn); background: var(--warn-soft); }
+.box.warn .box-title    { color: var(--warn); }
+.box.success { border-left-color: var(--ok); background: var(--ok-soft); }
+.box.success .box-title { color: var(--ok); }
+
+/* ---- experiment blocks ---- */
+.lab {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  margin: 0 0 1.6rem;
+  overflow: hidden;
+}
+.lab-head {
+  background: #efece5;
+  padding: 0.45rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.lab-head .n { color: var(--accent); margin-right: 0.5rem; }
+.lab-body { padding: 0.9rem 1rem 0.5rem; }
+.lab-body pre { margin-bottom: 0.7rem; }
+
+/* ---- tables ---- */
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 0 0 1.2rem; }
+th, td { text-align: left; padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--mono); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+td.num { font-family: var(--mono); font-size: 0.85em; text-align: right; }
+tr.hit td { background: var(--ok-soft); font-weight: 600; }
+
+/* ---- quiz ---- */
+.quiz { border: 1px solid var(--rule); border-radius: 6px; padding: 0.4rem 1.1rem 1rem; margin: 0 0 1.6rem; background: #fff; }
+.quiz h2 { border-top: none; margin-top: 1.2rem; padding-top: 0; font-size: 1.15rem; }
+.quiz-q { margin: 1.1rem 0; }
+.quiz-prompt { font-weight: 600; margin-bottom: 0.55rem; }
+.quiz-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.93rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+}
+.quiz-opt:hover:not(:disabled) { border-color: var(--accent); }
+.quiz-opt:disabled { cursor: default; opacity: 0.9; }
+.quiz-opt.correct { background: var(--ok-soft); border-color: var(--ok); font-weight: 600; }
+.quiz-opt.wrong   { background: var(--warn-soft); border-color: var(--warn); }
+.quiz-explain { display: none; font-size: 0.9rem; color: var(--ink-soft); padding-left: 0.2rem; }
+.quiz-explain.show { display: block; }
+
+/* ---- footer / nav ---- */
+.footer-nav {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.92rem;
+}
+.ask-teacher {
+  margin-top: 2.4rem;
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+  border-left: 3px solid var(--rule);
+  padding-left: 1rem;
+  font-style: italic;
+}
+hr { border: none; border-top: 1px solid var(--rule); margin: 2.4rem 0; }
+.small { font-size: 0.85rem; color: var(--ink-soft); }
+
+/* ---- print ---- */
+@media print {
+  body { padding: 0; max-width: none; font-size: 11pt; }
+  pre { white-space: pre-wrap; }
+  .quiz-opt { display: none; }
+  .quiz-q::after { content: ""; }
+  a { color: var(--ink); }
+}

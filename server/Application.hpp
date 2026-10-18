@@ -1,61 +1,63 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
-#include <glib.h> // GMainLoop, g_unix_signal_add sources, guint
+#include <glib.h> // GMainLoop, GSource, GMainContext
 
-#include "model/CameraState.hpp"
+#include "model/Profile.hpp"
 #include "model/SystemStatus.hpp"
 #include "video/VideoPipeline.hpp"
-#include "web/ApiController.hpp"
+#include "web/CameraControl.hpp"
 
-/// Top-level coordinator: owns the pipeline and the services around it, and is
-/// the only place that knows how they fit together.
+/// Top-level coordinator: owns the capture pipeline and the control-plane
+/// state, and is the only place that knows how they fit together.
 ///
-/// Phase 1: owns only the VideoPipeline (single sink, autovideosink).
-/// Phase 2: the pipeline becomes tee + one valve-gated branch per profile.
-/// Phase 3: gains the control plane (WebServer + ApiController + ProfileManager).
-///
-/// STATUS: header only. Application.cpp is the implementation task.
+/// Phase 1 (now): preview pipeline (TestVideoSource -> AutoVideoSink) plus
+///   the profile catalog served AS DATA - setProfileEnabled() records desired
+///   state, no valve branches exist yet to apply it to.
+/// Phase 2: the pipeline becomes tee + one valve-gated branch per profile;
+///   the desired record becomes the live valve state, profiles() reports it.
+/// Phase 3: constructs ApiController with *this, registers routes on a
+///   WebServer bound to :8080 (proto::kControlPort).
 ///
 /// Contract for Application.cpp:
-///   - initialize(): gst_init(argc, argv) first, then create the source
-///     (TestVideoSource for now, CameraVideoSource in Phase 9), call
-///     pipeline().setVideoSource() + setupPipeline(), construct m_apiController
-///     with *this, registerRoutes(m_webServer), start the web server on 8080.
-///     A failed web-server bind must NOT abort the preview: log and continue.
-///   - run(): install the signal sources (g_unix_signal_add), attach ONE bus
-///     mechanism (attachPipelineEvents() for push, or attachBusPoll() to keep
-///     using VideoPipeline::pollBus()), start playback, then g_main_loop_run()
-///     until a source calls requestStop(). Stop the web server before returning.
-///   - stop(): pipeline pause/cleanup + webServer.stop(); idempotent.
-///   - The destructor must not touch Gst after gst_deinit(); call gst_deinit()
-///     at the very end of run(), after the web thread is joined.
-///   - startCamera()/stopCamera()/setResolution()/setFrameRate() must keep
-///     m_cameraState in sync and return false (never abort) on failure.
+///   - initialize(): gst_init first, then TestVideoSource (Phase 9: the real
+///     camera source) into pipeline().setVideoSource(), setupPipeline(),
+///     signal sources on m_context, attachBusWatch() on m_context. No
+///     WebServer/ApiController yet (Phase 3).
+///   - run(): play(), g_main_loop_run(m_mainLoop) until requestStop(), then
+///     stop(). gst_deinit() belongs to main.cpp, after ~Application.
+///   - stop(): pipeline stop, GSource cleanup, main loop unref; idempotent.
+///   - CameraControl (web thread once Phase 3 connects):
+///       systemStatus()/profiles(): take m_stateMutex, copy out, release.
+///         Never hold it across a blocking GStreamer call (set_state/get_state).
+///       setProfileEnabled(): idempotent map update under m_stateMutex;
+///         unknown name -> false, no change. Until Phase 2 this is the whole
+///         effect (desired state only) - that is the documented Phase 1
+///         behaviour, not a gap.
+///   - profiles(): build from the static catalog below, merging desired state:
+///       state = map ? (on ? proto::kStateReady : proto::kStateOff) : kStateOff
+///       url from proto::rtspUrlFor(proto::kRtspPort, "/" + name); url must
+///       exist in Phase 1 even though the media plane does not - the client
+///       contract (ARCHITECTURE section 6) makes it unconditional.
+///   - The profile catalog itself is data, not code (ARCHITECTURE section 4):
+///     a private static kDefaultCatalog seeded from its table (hd/sd/low/thumb).
 ///
-/// THREADING (exactly 2 threads you own: main + WebServer::run()):
-///   - main thread: run() -> g_main_loop_run(); the signal and bus sources fire
-///     on this thread's default GMainContext, plus the stats refresh
-///   - web thread:  WebServer::run() -> ApiController -> cameraState()/startCamera()
-///   m_cameraState and m_systemStatus are therefore shared. Read and write them
-///   only while holding m_stateMutex (cameraState(), systemStatus(), startCamera(),
-///   stopCamera(), setResolution(), setFrameRate(), onPipelineEvent(), and the
-///   stats refresh):
-///       std::lock_guard<std::mutex> lock(m_stateMutex);
-///   Never hold m_stateMutex across a blocking GStreamer call (set_state,
-///   get_state) — take the lock, copy, release, then call Gst.
-///   requestStop() is the ONLY method safe to call from another thread:
-///   g_main_loop_quit() is documented thread-safe.
-///   Phase 4/5 add threads (RTSP main loop, Qt GUI thread); this mutex stays the
-///   single place application state is synchronized.
+/// THREADING (exactly 2 threads from Phase 3: main + WebServer::run()):
+///   - main thread: run() -> g_main_loop_run(); signal + bus sources fire here
+///   - web thread: WebServer::run() -> ApiController -> CameraControl methods
+///   m_profileEnabled and m_systemStatus are the only shared state; every
+///   access is under m_stateMutex. requestStop() is the only cross-thread
+///   entry point outside that (g_main_loop_quit is documented thread-safe).
 class Application : public CameraControl
 {
 public:
-    Application() = default;
+    Application();
     ~Application();
 
     bool initialize(int argc, char **argv);
@@ -63,31 +65,28 @@ public:
     void stop();
 
     // CameraControl
-    CameraState cameraState() const override;
     SystemStatus systemStatus() const override;
-
-    bool startCamera() override;
-    bool stopCamera() override;
-    bool setResolution(std::uint32_t width, std::uint32_t height) override;
-    bool setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom) override;
+    std::vector<ProfileInfo> profiles() const override;
+    bool setProfileEnabled(const std::string &name, bool enabled) override;
 
 private:
     VideoPipeline m_pipeline;
-    // Phase 3 adds, once their implementations exist:
-    //   WebServer                     m_webServer;
-    //   std::unique_ptr<ApiController> m_apiController;  // needs *this
-    CameraState m_cameraState;
-    SystemStatus m_systemStatus;
-    mutable std::mutex m_stateMutex; // guards m_cameraState + m_systemStatus
 
-    // --- GLib main-loop sources (see the contract block above) ---
+    /// The catalog is data, not code (see contract block). Defined once in
+    /// Application.cpp, seeded from ARCHITECTURE section 4's table:
+    /// hd 1920x1080@30 4000k / sd 1280x720@30 2000k / low 854x480@30 800k /
+    /// thumb 640x360@15 300k.
+    static const std::vector<ProfileInfo> kDefaultCatalog;
+
+    std::map<std::string, bool> m_profileEnabled; // name -> desired valve state (default off)
+    SystemStatus m_systemStatus;
+    mutable std::mutex m_stateMutex; // guards m_profileEnabled + m_systemStatus
+
+    // --- GLib main-loop pieces (see the contract block above) ---
     bool installSignalHandlers();
     void requestStop(); // idempotent; safe from any thread
 
-    // Pick ONE in run(). Neither lets this class see GstBus or GstMessage:
-    // the bus belongs to VideoPipeline (README design principle, lines 110-119).
     bool attachPipelineEvents(); // PUSH: VideoPipeline raises plain-C++ events
-
     void onPipelineEvent(PipelineEvent event, const std::string &message);
 
     static gboolean onUnixSignal(gpointer userData);
@@ -98,7 +97,7 @@ private:
     GSource *m_sigintSource{nullptr};
     GSource *m_sigtermSource{nullptr};
 
-    GMainContext *m_context {nullptr};
+    GMainContext *m_context{nullptr};
 
     Application(const Application &) = delete;
     Application &operator=(const Application &) = delete;

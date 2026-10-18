@@ -1,53 +1,61 @@
 #pragma once
 
-#include <cstdint>
+#include <string>
 
-#include "model/CameraState.hpp"
+#include "model/Profile.hpp"
 #include "model/SystemStatus.hpp"
+#include "web/CameraControl.hpp"
 #include "web/WebServer.hpp"
 
-/// Everything the HTTP API is allowed to do to the application.
+/// Maps the control plane's HTTP routes (common/Protocol.hpp) onto
+/// CameraControl. Holds no state of its own.
 ///
-/// Implemented by Application. This interface exists so the web layer depends
-/// on an abstraction instead of on the app executable (no circular link) and
-/// so tests can substitute a fake controller.
-class CameraControl
-{
-public:
-    virtual ~CameraControl() = default;
-
-    virtual CameraState cameraState() const = 0;
-    virtual SystemStatus systemStatus() const = 0;
-
-    virtual bool startCamera() = 0;
-    virtual bool stopCamera() = 0;
-    virtual bool setResolution(std::uint32_t width, std::uint32_t height) = 0;
-    virtual bool setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom) = 0;
-};
-
-/// Maps HTTP routes onto CameraControl. Holds no state of its own.
+/// STATUS: header only. web/ApiController.cpp is the Phase 3 implementation
+/// task and must be written against this contract.
 ///
-/// STATUS: header only. ApiController.cpp is the implementation task.
+/// Routes (docs/ARCHITECTURE-SERVER-CLIENT.md section 6):
+///   GET  /api/health              -> getHealth
+///   GET  /api/status              -> getStatus
+///   GET  /api/profiles            -> getProfiles
+///   GET  /api/profiles/{name}     -> getProfile
+///   POST /api/profiles/{name}/on  -> onProfile
+///   POST /api/profiles/{name}/off -> offProfile
 ///
-/// Routes (README lines 306-310):
-///   GET  /api/status        -> 200, toJson(cameraState())+toJson(systemStatus())
-///   POST /api/camera/start  -> 200 when startCamera() succeeds, 500 otherwise
-///   POST /api/camera/stop   -> 200 when stopCamera() succeeds, 500 otherwise
-///   GET  /api/config        -> 200, current resolution / frame rate / source
-///   POST /api/config        -> 200 when setResolution()/setFrameRate() succeed,
-///                              400 when width/height/fps are missing or invalid
+/// Contract for ApiController.cpp:
+///   - getHealth: 200 with {"ok":true}.
+///   - getStatus: 200 with toJson(systemStatus()) - the SystemStatus JSON
+///     ONLY, never concatenated with anything else.
+///   - getProfiles: 200 with {"profiles":[...]} in catalog order.
+///   - getProfile/onProfile/offProfile take the name from the request path
+///     (path parsing is internal); each answers 200 with toJson(profile) -
+///     for the actions, the state AFTER the change - or 404 jsonError when
+///     the name is not in the catalog.
+///   - on/off are idempotent (Protocol.hpp): setProfileEnabled returning true
+///     for an already-changed profile is still 200.
+///   - Route registration happens inside registerRoutes(); WebServer routes on
+///     exact "METHOD /path" keys, so registerRoutes() enumerates
+///     m_control.profiles() once and registers a concrete key per catalog
+///     name. Unknown names then answer 404 the same way any unregistered path
+///     does. Call registerRoutes() before WebServer::start().
 class ApiController
 {
 public:
     explicit ApiController(CameraControl &control);
 
+    /// Registers every route above on the server. Call once, before start().
     void registerRoutes(WebServer &server);
 
+    // The per-route handlers share the WebServer::HttpHandler shape
+    // (HttpResponse(const HttpRequest&)), so registerRoutes() binds them
+    // directly. They stay public so a test can call them with a hand-built
+    // HttpRequest: the test surface is the interface.
+
+    HttpResponse getHealth(const HttpRequest &request);
     HttpResponse getStatus(const HttpRequest &request);
-    HttpResponse startCamera(const HttpRequest &request);
-    HttpResponse stopCamera(const HttpRequest &request);
-    HttpResponse getConfig(const HttpRequest &request);
-    HttpResponse updateConfig(const HttpRequest &request);
+    HttpResponse getProfiles(const HttpRequest &request);
+    HttpResponse getProfile(const HttpRequest &request);  ///< GET /api/profiles/{name}
+    HttpResponse onProfile(const HttpRequest &request);   ///< POST /api/profiles/{name}/on
+    HttpResponse offProfile(const HttpRequest &request);  ///< POST /api/profiles/{name}/off
 
 private:
     CameraControl &m_control;

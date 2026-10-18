@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference — Branching Elements (tee / queue / valve)</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Reference</p>
+<h1>Branching Elements</h1>
+<p class="subtitle">tee, queue, valve, bin &amp; ghost pad — the elements that fan out the camera-platform pipeline. Compressed from <a href="../lessons/0001-one-source-two-roads.html">Lesson 1</a> through <a href="../lessons/0004-profile-host.html">Lesson 4</a>.</p>
+
+<h2>The preroll gate <span class="small">(the one rule that explains most stalls)</span></h2>
+<div class="box warn">
+<span class="box-title">Rule</span>
+<p>A sink completes preroll only when it receives a <strong>buffer, GAP event, or EOS</strong>. Until <em>every</em> sink in the pipeline completes preroll, no sink renders, even in live pipelines that print <code>PLAYING</code>. Symptoms of one starved sink: all outputs stay empty / stuck at <code>Pipeline is PREROLLING ...</code>. <br>Source: <a href="https://gstreamer.freedesktop.org/documentation/additional/design/preroll.html">preroll design doc</a>.</p>
+</div>
+
+<h2>tee</h2>
+<p>Fans one stream out to N src pads. Every buffer goes to <em>every</em> pad, pushed sequentially in the pushing thread.</p>
+<table>
+<tr><th>Item</th><th>Detail</th></tr>
+<tr><td>Doc</td><td><a href="https://gstreamer.freedesktop.org/documentation/coreelements/tee.html">tee</a> · presence: always</td></tr>
+<tr><td>Pads</td><td>request src pads (<code>src_%u</code>), one per branch</td></tr>
+<tr><td><code>allow-not-linked</code></td><td>return OK with no linked pads (default false)</td></tr>
+<tr><td>Golden rule</td><td>“One needs to use separate queue elements … in each branch … Otherwise a blocked dataflow in one branch would stall the other branches.”</td></tr>
+</table>
+
+<h2>queue</h2>
+<p>Thread boundary + bounded buffer. <code>chain()</code> returns immediately (unblocks the tee); a private src task drains buffers downstream.</p>
+<table>
+<tr><th>Property</th><th>Default</th><th>Notes</th></tr>
+<tr><td><code>max-size-buffers</code></td><td>200</td><td>whichever limit is hit first blocks (or leaks)</td></tr>
+<tr><td><code>max-size-bytes</code></td><td>10 485 760 (10 MB)</td><td></td></tr>
+<tr><td><code>max-size-time</code></td><td>1 000 000 000 ns (1 s)</td><td>the practical slack in camera work: ≈30 frames at 30 fps</td></tr>
+<tr><td><code>leaky</code></td><td><code>no</code></td><td><code>upstream</code> drops oldest, <code>downstream</code> drops newest instead of blocking upstream</td></tr>
+</table>
+<p class="small"><a href="https://gstreamer.freedesktop.org/documentation/coreelements/queue.html">queue docs</a> · for the multi-branch case <code>multiqueue</code> also exists.</p>
+
+<h2>valve</h2>
+<p>Runtime on/off switch. <code>drop</code> is writable at any moment; <code>drop-mode</code> only in NULL/READY.</p>
+<table>
+<tr><th>drop-mode</th><th>Behaviour when <code>drop=true</code></th></tr>
+<tr><td><code>drop-all</code> <span class="small">(default)</span></td><td>buffers <em>and</em> events dropped — starves the sink entirely</td></tr>
+<tr><td><code>forward-sticky-events</code></td><td>buffers dropped; caps/segment forwarded — sink still gets no data</td></tr>
+<tr><td><code>transform-to-gap</code></td><td>buffers become GAP events → sink can still preroll</td></tr>
+</table>
+<p class="small"><a href="https://gstreamer.freedesktop.org/documentation/coreelements/valve.html">valve docs</a>. Note: downstream errors are ignored while <code>drop=TRUE</code>.</p>
+<p class="small"><strong>Starting closed at startup</strong> (valve <code>drop=true</code> before PLAYING) freezes the pipeline unless the starved sink is <code>async=false</code>: verified for <code>appsink</code> — plays normally, reopen clean (65 ms settle, full rate). NOT verified for filesink+encoder. With the default <code>async=true</code> the freeze is <strong>permanent</strong> — reopening the valve later does not rescue it. (labs/lab-async-appsink.cpp)</p>
+<p class="small"><strong>Where the freeze lives (state probes):</strong> live → pipeline parks at <code>PAUSED → PLAYING</code> (PAUSED does commit), starved sink at <code>READY → PAUSED</code>; non-live → pipeline <code>READY → PLAYING</code>. The flow wedges ~1 s in: the stopped branch's queue fills to its 1 s limit, the tee's sequential push blocks, the source thread freezes — all branches starve, and a later valve reopen has nothing to forward. Bus stays silent (no error): detect with a <code>gst_element_get_state</code> timeout watchdog. (labs/lab-preroll-states.cpp, labs/lab-stall-mechanism.cpp)</p>
+
+<h3>Known gap-passing behaviour (measured on this machine, GStreamer 1.28.2)</h3>
+<table>
+<tr><th>Element between valve and sink</th><th>GAP reaches sink?</th></tr>
+<tr><td><code>videoscale</code></td><td>yes</td></tr>
+<tr><td><code>capsfilter</code> / plain caps</td><td>yes</td></tr>
+<tr><td><code>x264enc</code></td><td><strong>no</strong> — pipeline freezes if dropped at startup</td></tr>
+</table>
+
+<h2>bin &amp; ghost pad</h2>
+<p>A <code>GstBin</code> is a container that is itself an element — from outside it participates as a single element. A <strong>ghost pad</strong> exposes one internal pad on the bin (a proxy): the host links to the ghost, data flows to the internal target. (<a href="../lessons/0003-bins-and-ghost-pads.html">Lesson 3</a> · <a href="../lessons/0004-profile-host.html">Lesson 4</a>)</p>
+<table>
+<tr><th>Item</th><th>Detail</th></tr>
+<tr><td>Docs</td><td><a href="https://gstreamer.freedesktop.org/documentation/gstreamer/gstghostpad.html">GstGhostPad reference</a> · <a href="https://gstreamer.freedesktop.org/documentation/additional/design/gstghostpad.html">design doc</a></td></tr>
+<tr><td>Create <span class="small">(1.28)</span></td><td><code>gst_ghost_pad_new(name, target)</code> → floating ref · then <code>gst_element_add_pad(bin, ghost)</code>. <code>gst_element_add_ghost_pad</code> no longer exists.</td></tr>
+<tr><td>Ownership</td><td><code>get_static_pad</code> / <code>request_pad_simple</code> return full refs (you unref after use); the ghost refs its target; <code>add_pad</code> consumes the ghost.</td></tr>
+<tr><td>Static bins</td><td>after attaching all ghost pads, call <code>gst_element_no_more_pads(bin)</code></td></tr>
+<tr><td>Runtime lookup</td><td><code>gst_bin_get_by_name(bin, "pvalve")</code> — scoped to the bin, so sibling bins may reuse internal names</td></tr>
+</table>
+
+<h2>identity (lab tool)</h2>
+<p>Passthrough used to fake a slow consumer: <code>identity sleep-time=&lt;µs&gt;</code> sleeps between buffers (<code>500000</code> = 0.5 s per buffer ≈ 2 fps).</p>
+
+<h2>Verified lab recipes (copy-paste)</h2>
+<pre><code><span class="c"># tee + queues, 60 frames of 320x240 I420 → both files 6,912,000 B</span>
+gst-launch-1.0 -q videotestsrc num-buffers=60 ! videoconvert \
+  ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=a.raw t. ! queue ! filesink location=b.raw
+
+<span class="c"># the phase-2 topology as a prototype (10 s; hd.264 + sd.264)</span>
+timeout 10 gst-launch-1.0 -q videotestsrc is-live=true ! videoconvert \
+  ! video/x-raw,format=I420,width=1920,height=1080,framerate=30/1 ! tee name=t \
+  t. ! queue ! videoscale ! video/x-raw,width=1920,height=1080 \
+    ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=30 ! filesink location=hd.264 \
+  t. ! queue ! videoscale ! video/x-raw,width=1280,height=720 \
+    ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=30 ! filesink location=sd.264
+
+<span class="c"># inspect anything</span>
+gst-inspect-1.0 queue | grep -A3 max-size
+gst-inspect-1.0 x264enc | grep -i bitrate
+
+<span class="c"># C++: attach a profile bin to a tee (labs/lab3, labs/lab4)</span>
+GstPad *tee_pad = gst_element_request_pad_simple(tee, "src_%u");
+GstPad *bin_pad = gst_element_get_static_pad(bin, "sink");  <span class="c">// the ghost pad</span>
+gst_pad_link(tee_pad, bin_pad);
+gst_object_unref(tee_pad);
+gst_object_unref(bin_pad);
+
+<span class="c"># C++: flip a profile at runtime (valve inside the bin)</span>
+GstElement *valve = gst_bin_get_by_name(GST_BIN(bin), "pvalve");
+g_object_set(valve, "drop", TRUE, nullptr);  <span class="c">// FALSE resumes</span>
+gst_object_unref(valve);
+
+<span class="c"># measured (labs/lab4, GStreamer 1.28.2): hd 1280x720@2500k, sd 854x480@1200k, live</span>
+t=3s  hd=1,012,757 B  sd=481,104 B   <span class="c"># drop sd here</span>
+t=5s  hd=1,575,868 B  sd=481,104 B   <span class="c"># sd frozen byte-exact</span>
+t=6s  hd=1,939,738 B  sd=481,104 B   <span class="c"># resume sd here</span>
+t=9s  hd=2,856,054 B  sd=885,522 B   <span class="c"># no backlog burst on resume</span></code></pre>
+
+<h2>CPU rule of thumb <span class="small">(this machine, 720p30, x264enc ultrafast+zerolatency)</span></h2>
+<table>
+<tr><th>Pipelines running</th><th>CPU</th></tr>
+<tr><td>1 encoder branch</td><td class="num">≈ 92 %</td></tr>
+<tr><td>2 encoder branches</td><td class="num">≈ 182 %</td></tr>
+<tr><td>2nd branch dropped at startup (async=false sink)</td><td class="num">≈ 95 %</td></tr>
+</table>
+
+<p class="small">Design consequences for camera-platform: queue on every branch · never start with a valve closed · drop only after preroll, mid-run drops are safe · if a profile must be absent from frame one, do not build the branch · profiles as config rows, one bin+ghost-pad <code>ProfileBin</code> per profile · queue closest to the tee (encoder work on its own thread), valve after the queue.</p>
+
+<div class="footer-nav">
+  <span><a href="../lessons/0001-one-source-two-roads.html">Lesson 1</a> · <a href="../lessons/0002-valve-the-switch.html">Lesson 2</a> · <a href="../lessons/0003-bins-and-ghost-pads.html">Lesson 3</a> · <a href="../lessons/0004-profile-host.html">Lesson 4</a></span>
+  <span><a href="https://discourse.gstreamer.org/c/app-dev/7">Ask the community</a></span>
+</div>
+
+</body>
+</html>

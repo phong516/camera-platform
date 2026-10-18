@@ -4,7 +4,7 @@
 #include <sstream>
 #include <string>
 
-#include "model/CameraState.hpp" // jsonEscape
+#include "model/JsonUtil.hpp" // jsonEscape
 
 /// How the device is currently attached to the network.
 enum class NetworkState

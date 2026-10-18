@@ -251,19 +251,25 @@ camera-platform/
 |   |-- Protocol.hpp            # ports, API paths, mount names, state names
 |   `-- README.md               # rules for what may live here
 |
-|-- model/                      # CameraState, SystemStatus (value types)
-|   `-- CMakeLists.txt          # INTERFACE target `model_lib`
+|-- model/                      # CameraState, SystemStatus, Profile (value types)
+|   |-- CMakeLists.txt          # INTERFACE target `model_lib`
+|   |-- CameraState.hpp
+|   |-- SystemStatus.hpp
+|   |-- Profile.hpp             # catalog entry + its JSON shape (section 6)
+|   `-- JsonUtil.hpp            # jsonEscape, shared serialization helper
 |
 |-- web/                        # HTTP server + message parsing (POSIX sockets)
 |   |-- CMakeLists.txt          # static lib `web_lib`
 |   |-- WebServer.{hpp,cpp}     # cpp empty until Phase 3
 |   |-- ApiController.{hpp,cpp} # cpp empty until Phase 3
+|   |-- CameraControl.hpp       # control-plane seam; implemented by server/Application
 |   `-- HttpMessage.hpp
 |
 |-- video/                      # GStreamer pipeline + sources
 |   |-- CMakeLists.txt          # static lib `video_lib`
 |   |-- VideoPipeline.{hpp,cpp} # single-sink pipeline; Phase 2 adds ProfileHost
 |   |-- VideoSource.hpp
+|   |-- VideoSink.hpp           # sink seam: AutoVideoSink (prod); fakesink (tests)
 |   |-- TestVideoSource.{hpp,cpp}
 |   `-- CameraVideoSource.{hpp,cpp}
 |
@@ -299,6 +305,7 @@ camera-platform/
     |-- CMakeLists.txt
     |-- TestSupport.hpp
     |-- video/test_videopipeline.cpp
+    |-- video/FakeSink.hpp      # VideoSink test adapter (fakesink)
     `-- web/test_http.cpp
 ```
 

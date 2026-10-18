@@ -184,16 +184,18 @@ camera-platform/
 │   ├── Protocol.hpp            # ports, API paths, mount names, state names
 │   └── README.md
 │
-├── model/                      # CameraState, SystemStatus (value types)
+├── model/                      # CameraState, SystemStatus, Profile, JsonUtil (value types)
 │
 ├── web/                        # HTTP server + message parsing (POSIX sockets)
 │   ├── WebServer.{hpp,cpp}     # cpp empty until Phase 3
 │   ├── ApiController.{hpp,cpp} # cpp empty until Phase 3
+│   ├── CameraControl.hpp       # control-plane seam: Application implements, tests fake
 │   └── HttpMessage.hpp
 │
 ├── video/                      # GStreamer pipeline + video sources
 │   ├── VideoPipeline.{hpp,cpp}
 │   ├── VideoSource.hpp
+│   ├── VideoSink.hpp           # sink seam: AutoVideoSink (prod); fakesink (tests)
 │   ├── TestVideoSource.{hpp,cpp}
 │   └── CameraVideoSource.{hpp,cpp}
 │
@@ -377,6 +379,12 @@ The QML layer should eventually expose:
 ### Phase 6 — Web Server
 
 Add an HTTP control interface.
+
+> **Superseded by the profile-based control plane** in
+> [docs/ARCHITECTURE-SERVER-CLIENT.md](docs/ARCHITECTURE-SERVER-CLIENT.md)
+> section 6: `GET /api/status`, `GET /api/health`, `GET /api/profiles`, and the
+> per-profile `/on` / `/off` routes (constants in `common/Protocol.hpp`). The
+> endpoints below were never implemented and are no longer the contract.
 
 Example API:
 

@@ -4,6 +4,8 @@
 #include <sstream>
 #include <string>
 
+#include "model/JsonUtil.hpp" // jsonEscape
+
 /// Lifecycle of the capture pipeline as seen by the rest of the application.
 enum class CameraStatus
 {
@@ -30,58 +32,6 @@ inline const char *toString(CameraStatus status)
         return "error";
     }
     return "unknown";
-}
-
-/// Escape a UTF-8 string so it can be embedded inside a JSON string literal.
-/// HEADER-ONLY: do not define in .cpp.
-inline std::string jsonEscape(const std::string &value)
-{
-    std::string out;
-    out.reserve(value.size() + 8);
-
-    for (const char c : value)
-    {
-        switch (c)
-        {
-        case '"':
-            out += "\\\"";
-            break;
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\b':
-            out += "\\b";
-            break;
-        case '\f':
-            out += "\\f";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20)
-            {
-                static const char *hexDigits = "0123456789abcdef";
-                const auto byte = static_cast<unsigned char>(c);
-                out += "\\u00";
-                out += hexDigits[(byte >> 4) & 0x0F];
-                out += hexDigits[byte & 0x0F];
-            }
-            else
-            {
-                out += c;
-            }
-            break;
-        }
-    }
-
-    return out;
 }
 
 /// Snapshot of the capture configuration and health.

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 2 — Valve: The Switch That Also Kills</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0002</p>
+<h1>Valve: The Switch That Also Kills</h1>
+<p class="subtitle">Turning a profile off with <code>valve</code> — and the preroll trap that turns it into a whole-pipeline outage.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> Phase 2 exposes <code>--drop &lt;name&gt;</code> to turn individual profiles off without stopping capture. <code>valve</code> is the switch — but used naively it has a lethal failure mode you need to design around.
+</div>
+
+<div class="box rule">
+<span class="box-title">Recap from Lesson 1</span>
+<p>Every branch after a <code>tee</code> carries its own <code>queue</code>. Queues give each branch a private thread and ~1 second of slack, so one branch being slow no longer blocks the others.</p>
+</div>
+
+<h2>Concept: the switch</h2>
+
+<p><code>valve</code> is a passthrough element with one job: its <code>drop</code> property (a boolean, writable at any time) decides whether buffers and events continue downstream or are discarded.</p>
+
+<pre class="diagram">t. ! queue ! valve name=sd_switch ! videoscale ! … ! x264enc ! appsink
+                     ^
+                     └─ runtime: sd_switch.drop = true  →  SD profile off</pre>
+
+<p>Its <code>drop-mode</code> property picks what “discarded” means — this choice is the trap:</p>
+<table>
+<tr><th>drop-mode</th><th>What the valve does when <code>drop=true</code></th></tr>
+<tr><td><code>drop-all</code> <span class="small">(default)</span></td><td>Drops all buffers <em>and all events</em>. Nothing at all flows.</td></tr>
+<tr><td><code>forward-sticky-events</code></td><td>Drops buffers, forwards caps/segment — but sends no replacement data.</td></tr>
+<tr><td><code>transform-to-gap</code></td><td>Converts dropped buffers into <em>GAP events</em> and forwards sticky events. Special, as you’ll see.</td></tr>
+</table>
+<p class="small"><code>drop-mode</code> can only be set while the element is in NULL/READY — i.e. before the pipeline starts. <code>drop</code> itself can flip any time. (<a href="https://gstreamer.freedesktop.org/documentation/coreelements/valve.html">valve docs</a>)</p>
+
+<h2>Lab: the whole-pipeline outage</h2>
+
+<div class="lab">
+<div class="lab-head"><span class="n">V1</span> drop one branch at startup — everything dies</div>
+<div class="lab-body">
+<pre><code>timeout 5 gst-launch-1.0 videotestsrc is-live=true ! videoconvert \
+  ! video/x-raw,width=1280,height=720,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=a.raw \
+  t. ! queue ! valve drop=true ! filesink location=b.raw
+stat -c '%n %s B' a.raw b.raw</code></pre>
+<p>The pipeline claims success…</p>
+<pre><code>Pipeline is live and does not need PREROLL ...
+Pipeline is PREROLLED ...
+Setting pipeline to PLAYING ...</code></pre>
+<p>…and yet <em>nothing anywhere</em> produces data:</p>
+<pre><code>a.raw 0 B     <span class="w"># branch A has no valve at all!</span>
+b.raw 0 B</code></pre>
+<p>Why: the valve drops branch B's very first buffer (and its events). Branch B's sink therefore <strong>never receives what it needs to finish preroll</strong> — and no sink renders until the pipeline's PLAYING state is genuinely committed, which is gated on every sink completing preroll. One starved sink freezes the entire pipeline, queues and all. (Non-live sources show the same failure as a permanent <code>Pipeline is PREROLLING ...</code>.)</p>
+<p>This generalises: <em>any</em> branch whose sink never gets its first buffer — miswired, starving, dropped — freezes every other branch too. You met the queue-less version of this in Lesson 1; this is the same gate with a different trigger.</p>
+</div>
+</div>
+
+<div class="box warn">
+<span class="box-title">Mechanics, measured with state probes (labs/lab-preroll-states.cpp, labs/lab-stall-mechanism.cpp)</span>
+<p><strong>Where the pipeline parks.</strong> Live pipeline, valve closed at startup, default async sink: the pipeline really commits <code>PAUSED</code> (a live source skips the gate for that step — “Pipeline is live and does not need PREROLL”) and then parks forever at <code>PAUSED → PLAYING</code>; the starved sink sits at <code>READY → PAUSED</code>; upstream elements do commit PLAYING. Non-live: the pipeline never even reaches PAUSED — stuck <code>READY → PLAYING</code>. Either way “stuck at PREROLLING” is just the informal name for this condition.</p>
+<p><strong>How the freeze spreads.</strong> ~1 s of buffers flow, then: the stopped branch's sink (parked in PAUSED, not rendering) stops consuming → its queue fills to the default 1-second limit (~30 buffers) → the tee's sequential push into that branch blocks → <em>the source's own thread freezes</em> → every other branch starves, including ones with open valves. Reopening the valve later has nothing to forward: no buffers ever arrive again. (Single-branch pipelines, with no wedged sibling holding the source back, <em>can</em> be rescued by a reopen — the multi-branch case cannot.)</p>
+<p><strong>Bus during the stall: silent.</strong> No ERROR, no WARNING, nothing — the last messages are normal startup ones. Detect it yourself: after <code>set_state(PLAYING)</code>, watch <code>gst_element_get_state(pipeline, &amp;s, &amp;p, timeout)</code>; a timeout with the sink still at <code>READY</code> pinpoints the starved profile.</p>
+</div>
+
+<h2>What actually rescues the others</h2>
+
+<p>Three candidate fixes; only some work, and the reasons matter:</p>
+
+<div class="lab">
+<div class="lab-head"><span class="n">V2</span> transform-to-gap — works until an encoder eats the gap</div>
+<div class="lab-body">
+<pre><code>timeout 4 gst-launch-1.0 -q videotestsrc is-live=true ! videoconvert \
+  ! video/x-raw,width=1280,height=720,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=a.raw \
+  t. ! queue ! valve drop=true drop-mode=transform-to-gap \
+  ! videoscale ! video/x-raw,width=640,height=360 ! filesink location=b.raw
+stat -c '%n %s B' a.raw b.raw</code></pre>
+<pre><code>a.raw 120827904 B    <span class="g"># branch A flows! (≈121 MB in 4 s)</span>
+b.raw 0 B            <span class="c"># gap events carry no data — expected</span></code></pre>
+<p>GAP events count as “data received” for preroll, so the starved sink completes preroll and the pipeline plays. <code>videoscale</code> and <code>capsfilter</code> pass gaps through fine.</p>
+<p>But insert an <code>x264enc</code> before the sink — as Phase 2 will — and it breaks again:</p>
+<pre><code><span class="c"># same as above, but branch B: … valve drop-mode=transform-to-gap
+#   ! x264enc speed-preset=ultrafast tune=zerolatency ! filesink location=b.264</span>
+a.264 0 B    <span class="w"># x264enc does NOT forward the gap → sink never prerolls → frozen</span>
+b.264 0 B</code></pre>
+</div>
+</div>
+
+<div class="lab">
+<div class="lab-head"><span class="n">V3</span> async=false on the starved sink</div>
+<div class="lab-body">
+<pre><code>timeout 4 gst-launch-1.0 -q videotestsrc is-live=true ! videoconvert \
+  ! video/x-raw,width=1280,height=720,framerate=30/1 ! tee name=t \
+  t. ! queue ! x264enc speed-preset=ultrafast tune=zerolatency ! filesink location=a.264 \
+  t. ! queue ! valve drop=true ! fakesink async=false
+stat -c '%n %s B' a.264</code></pre>
+<pre><code>a.264 1041741 B    <span class="g"># branch A encodes normally (≈4 s of H.264)</span></code></pre>
+<p><code>async=false</code> tells the sink “don’t hold up the pipeline for my preroll”. It worked for <code>fakesink</code> here and drops CPU back to single-branch levels:</p>
+<table>
+<tr><th>Configuration (720p30 live, x264enc ultrafast+zerolatency)</th><th>CPU</th></tr>
+<tr><td>One branch only (baseline)</td><td class="num">92.3 %</td></tr>
+<tr><td>Two branches open (<code>drop=false</code>)</td><td class="num">182.0 %</td></tr>
+<tr><td>Branch B dropped, <code>async=false</code> sink</td><td class="num">94.6 %</td></tr>
+</table>
+<p>Caveat: the trick is sink-specific. The same <code>async=false</code> on a <code>filesink</code> behind an encoder did <em>not</em> rescue the pipeline in our tests. Your real sink is an <code>appsink</code> — behaviour must be verified per sink type, never assumed.</p>
+</div>
+</div>
+
+<div class="box warn">
+<span class="box-title">Update — verified on an appsink later (<code>labs/lab-async-appsink.cpp</code>)</span>
+<p><strong>Closed at startup + <code>async=false</code>:</strong> the pipeline plays (the open sibling branch finished byte-identical to a reference run), and reopening the valve at t=2 s delivered samples 65 ms later at full rate. So for <code>appsink</code>, starting closed <em>can</em> work — set the flag at construction time.</p>
+<p><strong>Closed at startup + default <code>async=true</code>:</strong> permanent freeze in a multi-branch pipeline — reopening the valve later does <em>not</em> rescue it (0 B and 0 samples forever, even after the switch flips open; single-branch pipelines <em>are</em> rescue-able by a reopen — see the mechanics box above). If you keep valves closed at startup, the starved sink must be <code>async=false</code>, or don’t start closed at all.</p>
+<p class="small">The <code>filesink</code>+encoder failure stands; the flag remains sink-specific. This is why the design rule below says <em>verify your exact sink</em> before relying on any of this.</p>
+</div>
+
+<div class="box warn">
+<span class="box-title">The design rule that avoids all of this</span>
+<p><strong>Default rule: never start a pipeline with a valve closed.</strong> Open every profile at startup, let the pipeline preroll, and only then apply drops — that is also what users expect from “turn SD off”: a running stream being stopped, not a dead server. Mid-run drops are safe: preroll is long finished, and each branch's <code>queue</code> absorbs the starvation for its neighbours (Lesson 1, E4).</p>
+<p><strong>Refined by the appsink update above:</strong> starting closed is safe <em>only</em> when the starved sink is <code>async=false</code> — verified per sink type, never assumed. With appsink that combination works (and reopens cleanly); with a default <code>async=true</code> sink it is a permanent, unrecoverable freeze. Otherwise, if a profile must be off from the very first frame, then <em>don’t build its branch at all</em> — attach/detach branches instead of starving them.</p>
+</div>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">1. Why did both files stay at zero bytes in V1?</p>
+  <button class="quiz-opt">A starved source blocks the pipeline from sending caps</button>
+  <button class="quiz-opt">A starved sink blocks the pipeline from finishing preroll</button>
+  <button class="quiz-opt">A starved queue blocks the pipeline from sending gaps</button>
+  <p class="quiz-explain">The dropped branch's sink never received its first buffer, so preroll never completed anywhere — including on branch A, which had no valve at all.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. Which fix kept the encoding branch alive at startup?</p>
+  <button class="quiz-opt">Give every starving branch much longer queue limits</button>
+  <button class="quiz-opt">Give every starving branch leaky=down, or defer drops</button>
+  <button class="quiz-opt">Give every terminal sink async=false, or defer drops</button>
+  <p class="quiz-explain">Queues don't gate preroll, and leaky drops still deliver no first buffer. <code>async=false</code> (on <code>fakesink</code>) worked; deferring the drop until after preroll is the approach we'll recommend for Phase 2.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">3. Why is a mid-run drop safe for the other branches?</p>
+  <button class="quiz-opt">Because preroll finished long ago and queues absorb traffic</button>
+  <button class="quiz-opt">Because caps arrived long ago and valves absorb traffic</button>
+  <button class="quiz-opt">Because clocks started long ago and tees absorb traffic</button>
+  <p class="quiz-explain">The preroll gate only guards startup. Once playing, a starving branch just fills its queue while the others keep going (Lesson 1, E4: fast branch reached 39 frames while the slow branch managed 7).</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p>Read the <a href="https://gstreamer.freedesktop.org/documentation/coreelements/valve.html">valve documentation</a> (3 minutes), especially the note that a downstream error is ignored while <code>drop=TRUE</code>, and the <code>drop-mode</code> enum table. The preroll behaviour behind V1 is explained in the <a href="https://gstreamer.freedesktop.org/documentation/additional/design/preroll.html">preroll design doc</a> (“The state is committed in the following conditions: a buffer is received… a GAP event… an EOS event”).</p>
+<p class="small">Quick reference: <a href="../reference/branching-cheatsheet.html">Branching Elements cheat sheet</a>.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Re-run V1 but with <code>drop=false</code>: watch both files grow, note the CPU. Then re-run with <code>drop=true drop-mode=transform-to-gap</code> and with <code>async=false</code>. You now have all three failure/repair modes measured on your machine.</li>
+  <li>Open <code>server/Application.cpp</code> and find where the pipeline is started and where <code>--drop &lt;name&gt;</code> would arrive. Write yourself a short order-of-operations note (scratch file or code comment) for the correct sequence: <em>start with all valves open → wait until preroll/first frames → then apply any requested drops</em>. Note the hazard you must avoid in one line: “a closed valve at startup starves its sink and freezes every profile.”</li>
+  <li>Keep this question open for later — it returns in the RTSP lesson: when a profile is dropped mid-run, what should the RTSP client of that profile see? A frozen last frame is one answer; gaps are another. Park the decision.</li>
+</ol>
+
+<div class="ask-teacher">
+Stuck on why drop-all also kills events, or how this changes once <code>appsrc</code>/RTSP enters the picture — ask your teacher agent. That is exactly the kind of nuance worth a conversation, not a guess.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0001-one-source-two-roads.html">Lesson 1 — One Source, Two Roads</a></span>
+  <span>Next: <a href="0003-bins-and-ghost-pads.html">Lesson 3 — Bins &amp; Ghost Pads: One Branch, One Box</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

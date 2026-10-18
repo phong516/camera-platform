@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 — One Source, Two Roads (tee &amp; queue)</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0001</p>
+<h1>One Source, Two Roads</h1>
+<p class="subtitle">How <code>tee</code> splits a stream — and why every branch needs its own <code>queue</code>.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> Phase 2 of camera-platform needs one camera capture to feed an HD profile and an SD profile (and more later). <code>tee</code> is the fork in that road; <code>queue</code> is what keeps the branches from tripping over each other.
+</div>
+
+<h2>Concept: the fork</h2>
+
+<p><code>tee</code> (T-junction) copies each incoming buffer to <em>every</em> src pad it has. Each output pad is a new road:</p>
+
+<pre class="diagram">            ┌─ t. ! queue ! … HD branch
+videotestsrc┄!videoconvert┄!capsfilter┄! tee name=t
+            └─ t. ! queue ! … SD branch</pre>
+
+<p>Two facts about <code>tee</code> determine everything that follows:</p>
+<ol>
+  <li><strong>Every buffer goes to every branch.</strong> Nothing is load-balanced or dropped — the same 1080p frame is handed to the HD road and the SD road.</li>
+  <li><strong>Pushes happen one branch at a time, in the same thread</strong> that delivered the buffer to the tee. The tee cannot move on to branch B until branch A's push has returned.</li>
+</ol>
+
+<p>A <code>queue</code> placed on a branch changes fact&nbsp;2: its <em>sink</em> side accepts the buffer and returns <em>immediately</em> — the push into the tee never waits. A private thread on the queue's <em>src</em> side then moves buffers onward. That thread boundary is the real gift: producer and consumer can run at different speeds, with the queue acting as a shock absorber between them. The official docs put the rule plainly:</p>
+
+<blockquote class="box rule">
+<span class="box-title">From the docs</span>
+<p>“One needs to use separate queue elements (or a multiqueue) in each branch to provide separate threads for each branch. Otherwise a blocked dataflow in one branch would stall the other branches.” — <a href="https://gstreamer.freedesktop.org/documentation/coreelements/tee.html">tee documentation</a></p>
+</blockquote>
+
+<p>Run the labs below in WSL to see this rule earn its keep. Every lab uses 320×240 I420 frames — 115,200 bytes per frame — so you can count frames by dividing file size.</p>
+
+<h2>Lab: watch the rule work</h2>
+
+<div class="lab">
+<div class="lab-head"><span class="n">E1</span> tee + queue on both branches — the happy path</div>
+<div class="lab-body">
+<pre><code>gst-launch-1.0 -q videotestsrc num-buffers=60 ! videoconvert \
+  ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=a.raw \
+  t. ! queue ! filesink location=b.raw
+stat -c '%n %s B' a.raw b.raw</code></pre>
+<p>Result — both files exist and are <em>identical</em>:</p>
+<pre><code>a.raw 6912000 B     <span class="c"># 60 frames × 115,200 B</span>
+b.raw 6912000 B     <span class="g"># every frame reached every branch</span></code></pre>
+</div>
+</div>
+
+<div class="lab">
+<div class="lab-head"><span class="n">E2</span> remove the queues — total deadlock (try it yourself)</div>
+<div class="lab-body">
+<pre><code>timeout 5 gst-launch-1.0 videotestsrc num-buffers=60 ! videoconvert \
+  ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! tee name=t \
+  t. ! filesink location=a.raw \
+  t. ! filesink location=b.raw</code></pre>
+<p>It never starts. It prints forever:</p>
+<pre><code>Setting pipeline to PAUSED ...
+Pipeline is PREROLLING ...        <span class="w"># stuck here until timeout kills it</span></code></pre>
+<p>and both files stay at <code>0 B</code>. Why:</p>
+<ol>
+  <li>A sink must hold its first buffer and <em>wait</em> before it can render — the pipeline completes <em>preroll</em> only when every sink has received one. (<a href="https://gstreamer.freedesktop.org/documentation/additional/design/preroll.html">preroll design doc</a>)</li>
+  <li>The first <code>filesink</code> therefore blocks the tee's push to branch&nbsp;A until the pipeline reaches PLAYING.</li>
+  <li>PLAYING requires branch&nbsp;B's sink to get its first buffer — but the tee is still stuck on branch&nbsp;A and never gets to branch&nbsp;B.</li>
+</ol>
+<p>Circular wait. Adding <code>queue</code> to <em>just the first branch</em> breaks this particular deadlock (the queue's instant return lets the tee reach branch&nbsp;B) — but the second branch still throttles everything, as the next lab shows.</p>
+</div>
+</div>
+
+<div class="lab">
+<div class="lab-head"><span class="n">E3</span> queue on the fast branch only — slow branch drags it down</div>
+<div class="lab-body">
+<pre><code>timeout 4 gst-launch-1.0 -q videotestsrc num-buffers=60 ! videoconvert \
+  ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=fast.raw \
+  t. ! identity sleep-time=500000 ! filesink location=slow.raw
+stat -c '%n %s B' fast.raw slow.raw</code></pre>
+<p><code>identity sleep-time=500000</code> simulates a consumer that needs 0.5&nbsp;s per frame (~2 fps). After a 4-second window:</p>
+<pre><code>fast.raw 921600 B    <span class="c"># 8 frames</span>
+slow.raw 806400 B    <span class="c"># 7 frames — fast is stuck at the same pace</span></code></pre>
+<p>Without a queue on the slow branch, its sleeping pushes hold the tee — and the tee holds everyone.</p>
+</div>
+</div>
+
+<div class="lab">
+<div class="lab-head"><span class="n">E4</span> queue on both branches — the fast branch gets ahead</div>
+<div class="lab-body">
+<pre><code>timeout 4 gst-launch-1.0 -q videotestsrc num-buffers=60 ! videoconvert \
+  ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! tee name=t \
+  t. ! queue ! filesink location=fast.raw \
+  t. ! queue ! identity sleep-time=500000 ! filesink location=slow.raw
+stat -c '%n %s B' fast.raw slow.raw</code></pre>
+<pre><code>fast.raw 4492800 B    <span class="c"># 39 frames</span>
+slow.raw  806400 B    <span class="g"># 7 frames — fast ran ahead</span></code></pre>
+<p>Fast jumped ~1 second ahead (≈30 frames of slack) before the slowest branch set the pace again. That ~1&nbsp;s is no accident: a queue's default <code>max-size-time</code> is exactly 1 second (also 200 buffers, 10&nbsp;MB — whichever limit hits first). Queues buy you <em>bounded</em> independence, not infinite.</p>
+</div>
+</div>
+
+<div class="box rule">
+<span class="box-title">Rules to keep</span>
+<ul>
+<li>Put a <code>queue</code> on <em>every</em> branch after a <code>tee</code>. No exceptions.</li>
+<li>The queue gives each branch its own thread and a bounded buffer of slack (defaults: 200 buffers / 10 MB / 1 s).</li>
+<li>Beyond that slack, the slowest branch still sets the overall pace. Tune with <code>max-size-*</code>, or drop old data deliberately with <code>leaky=downstream</code>.</li>
+</ul>
+</div>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">1. A queue on every tee branch gives you…</p>
+  <button class="quiz-opt">A tee pad plus a clock, syncing every consumer</button>
+  <button class="quiz-opt">A leak monitor plus a queue, throttling every producer</button>
+  <button class="quiz-opt">A branch thread plus a buffer, decoupling every consumer</button>
+  <p class="quiz-explain">The queue returns from <code>chain()</code> instantly (so the tee never blocks) and its own thread drains buffers downstream — that is the decoupling.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">2. Two filesinks with no queues hang at startup because…</p>
+  <button class="quiz-opt">The first sink blocks the tee push until playing begins</button>
+  <button class="quiz-opt">The second sink rejects the tee push before caps arrive</button>
+  <button class="quiz-opt">The tee pads refuse the tee push before caps arrive</button>
+  <p class="quiz-explain">Sinks wait during preroll; the tee pushes sequentially; so branch B never receives the buffer its preroll needs. Circular wait — only a queue breaks it.</p>
+</div>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">3. The default queue limits are…</p>
+  <button class="quiz-opt">Two seconds of buffers, one hundred buffers, one megabyte</button>
+  <button class="quiz-opt">One second of buffers, two hundred buffers, ten megabytes</button>
+  <button class="quiz-opt">One second of buffers, five hundred buffers, ten megabytes</button>
+  <p class="quiz-explain">Any one limit blocks the queue — whichever is reached first. That is why E4 shows ≈1 s (≈30 frames) of slack at 30 fps.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p>Skim the official <a href="https://gstreamer.freedesktop.org/documentation/coreelements/tee.html">tee</a> page (5 minutes) — especially the “One needs to use separate queue elements…” paragraph and the pad/property list. Then glance at <a href="https://gstreamer.freedesktop.org/documentation/coreelements/queue.html">queue</a> for its properties.</p>
+<p class="small">Quick reference for both: <a href="../reference/branching-cheatsheet.html">Branching Elements cheat sheet</a>.</p>
+
+<h2>Your turn in the repo</h2>
+<p>Prototype the real Phase 2 topology with data sinks before any C++ exists. From <code>docs/ARCHITECTURE-SERVER-CLIENT.md</code>, one capture feeds two profiles. Translate it to this lab (10-second window, then inspect sizes; adjust the timeout so <code>timeout</code> is what stops it):</p>
+<pre><code>timeout 10 gst-launch-1.0 -q videotestsrc is-live=true ! videoconvert \
+  ! video/x-raw,format=I420,width=1920,height=1080,framerate=30/1 ! tee name=t \
+  t. ! queue ! videoscale ! video/x-raw,width=1920,height=1080 \
+    ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=30 ! filesink location=hd.264 \
+  t. ! queue ! videoscale ! video/x-raw,width=1280,height=720 \
+    ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=30 ! filesink location=sd.264</code></pre>
+<ol>
+  <li>Run it. Confirm both files grow and both are valid H.264 (<code>ffprobe hd.264</code> if installed).</li>
+  <li>Delete one <code>queue</code> and watch it wedge at <code>PREROLLING</code> — you now know exactly why.</li>
+  <li>Create <code>server/ProfileHost.hpp</code> and paste the working command as a comment at the top, plus a two-line note on why each <code>queue</code> is there. Do not implement the class yet — lesson 3 (bins &amp; ghost pads) fills it in, and this comment becomes its spec.</li>
+</ol>
+
+<div class="ask-teacher">
+Anything unclear — why the queue returns instantly, what preroll really is, how this maps to <code>ProfileHost</code> — ask your teacher agent before moving on. Confusion parked now costs triple later.
+</div>
+
+<div class="footer-nav">
+  <span><a href="../reference/branching-cheatsheet.html">Reference: branching elements</a></span>
+  <span>Next: <a href="0002-valve-the-switch.html">Lesson 2 — Valve: The Switch That Also Kills</a> →</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

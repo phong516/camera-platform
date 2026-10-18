@@ -8,7 +8,7 @@
 #include <sstream>
 #include <string>
 
-#include "model/CameraState.hpp" // jsonEscape
+#include "model/JsonUtil.hpp" // jsonEscape
 
 /// HEADER-ONLY: do not define in .cpp.
 inline std::string toLowerHelper(std::string value)

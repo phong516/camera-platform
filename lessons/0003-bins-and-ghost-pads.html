@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3 — Bins &amp; Ghost Pads: One Branch, One Box</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0003</p>
+<h1>Bins &amp; Ghost Pads: One Branch, One Box</h1>
+<p class="subtitle">Packaging a whole profile branch into one reusable element with a single pad — the exact shape of <code>server/ProfileBin</code>.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> Phase 2 gives each profile its own <code>queue ! valve ! videoscale ! capsfilter ! x264enc ! appsink</code> chain. On paper that's N chains (N×6 elements) for N profiles. With a <code>GstBin</code>, each chain becomes <em>one element with one sink pad</em> — <code>ProfileHost</code> then manages N boxes instead of 6N parts.
+</div>
+
+<div class="box rule">
+<span class="box-title">Recap from Lessons 1–2</span>
+<p>Every branch after the <code>tee</code> has its own <code>queue</code> (thread + ~1 s slack). <code>valve.drop</code> switches a branch off at runtime — but drop it only <em>after</em> preroll, or the starved sink freezes the whole pipeline.</p>
+</div>
+
+<h2>Concept: the box and the proxy pad</h2>
+
+<p>A <code>GstBin</code> is a container that is <em>itself</em> a <code>GstElement</code>. You add elements to it, link them internally, and from the outside the bin participates in the pipeline like a single element: state changes, bus messages, clock selection and refcounting all delegate to its children.</p>
+
+<p>The catch: a bin’s internal elements have their own pads. When the host pipeline links a <code>tee</code> to this branch, which pad does it link to? By default: none that the host can see — the bin would be a box with no handle. The handle is a <strong>ghost pad</strong>:</p>
+
+<div class="box rule">
+<span class="box-title">Definition</span>
+<p>“GhostPads are used to build complex compound elements out of existing elements. They are used to expose internal element pads on the complex element.” — <a href="https://gstreamer.freedesktop.org/documentation/additional/design/gstghostpad.html">Ghostpads design doc</a></p>
+</div>
+
+<pre class="diagram">                    bin "sd"
+        ┌──────────────────────────────────────────────┐
+tee ────┤ sink(ghost) → queue ! valve ! videoscale ! … │
+        └──────────────────────────────────────────────┘
+           ^ host sees exactly this one pad</pre>
+
+<p>A ghost pad is a <em>proxy</em>: data landing on it is forwarded to the internal pad it targets (here: <code>queue</code>’s sink pad). The host links to it as if the bin really had that pad. Internals stay private — which is the point when we later swap the <code>filesink</code> for an <code>appsink</code> without touching host code.</p>
+
+<div class="box warn">
+<span class="box-title">The API moved — read old tutorials with care</span>
+<p>Older tutorials (and some 1.x books) use <code>gst_element_add_ghost_pad(bin, target, name)</code>. That helper is deprecated and <strong>gone from the 1.28 headers</strong> on this machine. The current way is two calls:</p>
+<pre><code>ghost = gst_ghost_pad_new("sink", target_pad);  <span class="c">// floating ref, refs the target</span>
+gst_element_add_pad(bin, ghost);                <span class="c">// add_pad consumes the floating ref</span></code></pre>
+<p class="small"><a href="https://gstreamer.freedesktop.org/documentation/gstreamer/gstghostpad.html">GstGhostPad reference</a> · the design doc above explains the internal machinery (internal proxy pad, target swapping, activation) if you ever need it.</p>
+</div>
+
+<h2>Lab: build the box, drive it at runtime</h2>
+
+<p>Full source: <code>labs/lab3-profile-bin.cpp</code> in this repo. It builds one profile bin (<code>queue ! valve ! videoscale ! capsfilter ! x264enc ! filesink</code>), attaches it to a live <code>videotestsrc ! tee</code>, and drops the branch at t=3 s:</p>
+
+<pre><code>cd /tmp/cam-recon
+g++ -Wall -O2 -o lab3 /home/phong/camera-platform/labs/lab3-profile-bin.cpp \
+    $(pkg-config --cflags --libs gstreamer-1.0)
+./lab3</code></pre>
+
+<pre><code>[t=3s] valve.drop = true        file=983326 B
+[t=5s] (branch dropped)        file=983326 B
+[t=6s] quitting                file=983326 B</code></pre>
+
+<p>At 2500 kbit/s you expect ≈313 KB/s of H.264, so ≈940 KB after 3 s — measured 983,326 B (encoder warming up, close enough). Then the branch is switched off and the file is <strong>frozen to the byte</strong> for the rest of the run: the valve discards everything after it, deterministically. No in-flight frames leaked into the file.</p>
+
+<h3>The three interesting lines (inside <code>profile_bin_new</code>)</h3>
+<pre><code>GstPad *q_sink = gst_element_get_static_pad(queue, "sink");
+GstPad *ghost  = gst_ghost_pad_new("sink", q_sink);
+gst_object_unref(q_sink);              <span class="c">// ghost holds its own ref to the target</span>
+gst_element_add_pad(bin, ghost);       <span class="c">// consumes ghost's floating ref</span>
+gst_element_no_more_pads(bin);         <span class="c">// static bin: tell the core nothing else will appear</span></code></pre>
+
+<h3>How the host attaches it (and why request pads)</h3>
+<pre><code>GstPad *tee_pad = gst_element_request_pad_simple(tee, "src_%u");
+GstPad *bin_pad = gst_element_get_static_pad(bin, "sink");   <span class="c">// the ghost</span>
+gst_pad_link(tee_pad, bin_pad);
+gst_object_unref(tee_pad);   <span class="c">// you hold one ref; the tee keeps its own</span>
+gst_object_unref(bin_pad);
+
+<span class="c">// later, from the host: flip the switch by name, inside the bin</span>
+GstElement *valve = gst_bin_get_by_name(GST_BIN(bin), "pvalve");
+g_object_set(valve, "drop", TRUE, NULL);
+gst_object_unref(valve);</code></pre>
+
+<div class="box rule">
+<span class="box-title">Ownership in one table</span>
+<table>
+<tr><th>Call</th><th>Ref you get</th><th>Who releases it</th></tr>
+<tr><td><code>gst_ghost_pad_new</code></td><td>floating</td><td>consumed by <code>gst_element_add_pad</code></td></tr>
+<tr><td><code>gst_element_get_static_pad</code></td><td>full</td><td>you <code>gst_object_unref</code> after use</td></tr>
+<tr><td><code>gst_element_request_pad_simple</code></td><td>full</td><td>you unref after linking (element keeps the pad)</td></tr>
+</table>
+</div>
+
+<p class="small">Naming note: internal elements use short fixed names (<code>pq</code>, <code>pvalve</code>, …). Lookups via <code>gst_bin_get_by_name</code> are scoped to the bin, so sibling bins may reuse the same internal names — as this lab does for hd and sd in Lesson 4.</p>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">1. Why wrap the whole branch in a bin with a ghost sink pad?</p>
+  <button class="quiz-opt">Because bins merge branch threads and lower total encoding cost</button>
+  <button class="quiz-opt">Because the host links one pad and never sees the internals</button>
+  <button class="quiz-opt">Because ghost pads let starved sinks skip the preroll gate</button>
+  <p class="quiz-explain">Encapsulation is the point: <code>ProfileHost</code> manages N one-pad boxes, and swapping <code>filesink</code> → <code>appsink</code> later touches only the bin. The preroll gate from Lesson 2 is unaffected.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. What does <code>gst_ghost_pad_new</code> hand back to you?</p>
+  <button class="quiz-opt">A borrowed pointer that the bin replaces during preroll</button>
+  <button class="quiz-opt">A shared reference that caller and target both hold</button>
+  <button class="quiz-opt">A floating reference that <code>gst_element_add_pad</code> consumes</button>
+  <p class="quiz-explain">Floating ownership: adding it to the bin transfers it. The target pad is a separate matter — the ghost refs the target, so you unref your own reference to the target afterwards.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">3. How does the host attach a bin to the tee?</p>
+  <button class="quiz-opt">Request one tee src pad and link it to the bin’s ghost pad</button>
+  <button class="quiz-opt">Reuse the first tee src pad and link it again to the new bin</button>
+  <button class="quiz-opt">Set the tee’s allow-not-linked flag and let the bin self-link</button>
+  <p class="quiz-explain">Each branch needs its own request pad (<code>src_%u</code>); a pad can only have one peer, so reusing a linked pad fails. <code>allow-not-linked</code> just permits branches to be temporarily missing — it links nothing.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p>Skim the <a href="https://gstreamer.freedesktop.org/documentation/gstreamer/gstghostpad.html">GstGhostPad reference</a> (2 minutes — mostly ownership annotations), and keep the <a href="https://gstreamer.freedesktop.org/documentation/additional/design/gstghostpad.html">design doc</a> bookmarked for when ghost pad activation surprises you (it explains the internal proxy pad pair and how linking a pad to a <em>targetless</em> ghost pad auto-targets it — a trick you may want for dynamic attach/detach later).</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Read <code>labs/lab3-profile-bin.cpp</code> end to end. It is deliberately shaped like the class you are about to write.</li>
+  <li>Create <code>server/ProfileBin.hpp</code> and <code>server/ProfileBin.cpp</code> yourself: something that builds <code>queue ! valve ! videoscale ! capsfilter ! x264enc ! filesink</code> inside a <code>GstBin</code>, takes per-profile config (name, width, height, kbit/s, output path), exposes the bin element and a <code>setDrop(bool)</code>, and reports internal errors, not crashes. Keep <code>filesink</code> for now — the <code>appsink</code> swap is the RTSP lesson.</li>
+  <li>Bake in the Lesson 2 rule at construction time: the valve must never be built with <code>drop=true</code>. Either never expose it in the constructor, or assert it.</li>
+  <li>Compile it (add the files to the <code>camera-server</code> target or write a throwaway main — your call) and smoke-run it in WSL. Don’t integrate into <code>Application</code> yet; that comes with Lesson 4’s <code>ProfileHost</code>.</li>
+</ol>
+
+<div class="ask-teacher">
+Unclear why <code>gst_element_no_more_pads</code> matters, or when a ghost pad’s target should be swapped live (bye-bye static bin)? Ask your teacher agent — both are worth a thread before you write <code>ProfileBin</code>.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0002-valve-the-switch.html">Lesson 2 — Valve: The Switch That Also Kills</a></span>
+  <span>Next: <a href="0004-profile-host.html">Lesson 4 — ProfileHost: Two Profiles, Zero Drama</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

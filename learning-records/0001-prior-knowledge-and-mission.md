@@ -1,0 +1,7 @@
+# Prior knowledge baseline and mission established
+
+Before the first lesson, two things were established. **Prior knowledge**: Phong wrote the entire `camera-platform` repo himself — a single-branch pipeline (`video/VideoPipeline.cpp`: one source through encoding to one sink, with a bus watch, error handling, and a hand-rolled test harness). Evidence: repo structure, code style, and his stated goal of not shipping code he can't maintain. He has **no prior experience** with `tee`/`queue`/`valve`, preroll mechanics, bins/ghost pads, RTSP media factories, or `appsrc` bridging — Phase 2 will be his first contact with all of them.
+
+**Mission** (see [[MISSION.md]]): own camera-platform end-to-end, implementing Phase 2 himself; the agent teaches rather than implements. **Lesson format chosen by the learner**: short concept → runnable experiment with real measured numbers → one concrete step in the repo.
+
+Implications for future sessions: teach elements bottom-up (tee/queue → valve → bins & ghost pads → RTSP media factory → appsrc bridge), always pairing a mechanism with an observable symptom it explains (stalls, empty files, CPU) so debugging intuition grows alongside API knowledge. The `camera-platform` Phase 2 code belongs to the learner's hands; exercises should land as small, verifiable steps in the repo (a prototype command, a design note, a file skeleton) rather than agent-written code.

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 4 — ProfileHost: Two Profiles, Zero Drama</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0004</p>
+<h1>ProfileHost: Two Profiles, Zero Drama</h1>
+<p class="subtitle">One source, N profile bins on a tee, switches flipped while running — the full Phase 2 topology in C++.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> This is the shape of <code>server/ProfileHost</code>: a host that owns the source chain and the <code>tee</code>, attaches one <code>ProfileBin</code> per profile, and exposes <code>setProfileDrop(name, bool)</code> — which the CLI <code>--drop</code> flag will call, and later the web API too.
+</div>
+
+<div class="box rule">
+<span class="box-title">Answering Lesson 2’s parked question</span>
+<p>Lesson 2 ended with: “when a profile is dropped mid-run, what should its consumer see?” The mechanism part is now measured — the branch goes <em>silent</em> (frozen last frame once RTSP is involved), and the rest of the pipeline doesn’t notice. The UX decision (freeze vs. signal) stays parked until the RTSP lesson, but you can now reason from facts instead of guesses.</p>
+</div>
+
+<h2>Concept: profiles are data, not code</h2>
+
+<p>With <code>ProfileBin</code> as a box (Lesson 3), the host is a loop, not a pipeline diagram:</p>
+
+<pre class="diagram">videotestsrc(is-live) ! videoconvert ! caps(I420,1280x720@30) ! tee ─┬─▶ bin "hd"  (720p@2500k)
+                                                                      └─▶ bin "sd"  (480p@1200k)</pre>
+
+<p>Each profile is a config row — name, size, bitrate, output — and the host does per row: build bin, add to pipeline, request a tee src pad, link it to the bin’s ghost pad. A third profile is a third row, not a third copy of the code.</p>
+
+<p>Control stays the same as the lab: <code>gst_bin_get_by_name(bin, "pvalve")</code> → set <code>drop</code>. One subtlety explains why dropping sd never disturbs hd — and it is the same reason the queue comes first inside the bin:</p>
+
+<div class="box rule">
+<span class="box-title">Why the tee never stalls</span>
+<p>The <code>queue</code> is the element closest to the tee, so all encoder work runs on the queue’s private thread. When <code>valve.drop=true</code>, that thread keeps pulling buffers out of the queue and discarding them into the valve at full speed. The queue never fills, so the tee’s push into this branch never blocks, so no other branch is throttled. Dropping costs (almost) nothing and damages nothing.</p>
+</div>
+
+<h2>Lab: watch it happen</h2>
+
+<p>Full source: <code>labs/lab4-profile-host.cpp</code>. Timeline: drop sd at t=3 s, resume at t=6 s, quit at t=9 s.</p>
+
+<pre><code>cd /tmp/cam-recon
+g++ -Wall -O2 -o lab4 /home/phong/camera-platform/labs/lab4-profile-host.cpp \
+    $(pkg-config --cflags --libs gstreamer-1.0)
+./lab4</code></pre>
+
+<pre><code>[t=3s before drop sd] hd= 1012757 B  sd=  481104 B
+[t=3s] sd valve.drop = true  (sd frozen from here)
+[t=5s sd dropped  ] hd= 1575868 B  sd=  481104 B
+[t=6s before resume ] hd= 1939738 B  sd=  481104 B
+[t=6s] sd valve.drop = false (sd resumes)
+[t=9s final        ] hd= 2856054 B  sd=  885522 B</code></pre>
+
+<p>Three things to notice:</p>
+<table>
+<tr><th>Observation</th><th>Numbers</th></tr>
+<tr><td><strong>hd is untouched by the whole exercise.</strong> Its growth is steady through the drop and resume: ≈282 KB/s ≈ 2500 kbit/s as configured.</td><td class="num">1.01 → 1.58 → 1.94 → 2.86 MB</td></tr>
+<tr><td><strong>sd freezes byte-exact the moment it is dropped</strong> — same 481,104 B at t=3, t=5 and t=6. The valve discards everything; nothing leaks past it.</td><td class="num">481,104 B × 3 samples</td></tr>
+<tr><td><strong>sd resumes cleanly.</strong> 404,418 B arrive in the next 3 s (≈135 KB/s): a continuous stream, no backlog burst when the switch reopens — the queue stayed empty while dropping, exactly as the box above predicts.</td><td class="num">+404,418 B</td></tr>
+</table>
+
+<h3>What the resume tells you about the queue</h3>
+<p>If the queue had buffered ~1 s of frames while dropped, re-opening the valve would spray them all at once (a timestamp jump for any consumer). It didn’t: dropped buffers pass through the queue and die in the valve <em>immediately</em>, so the slack stays available and the branch resumes with perfect timing. Queue-first placement inside the bin buys you this — remember it when you place your review of <code>ProfileBin</code>.</p>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">1. Inside <code>ProfileBin</code>, why is the queue closest to the tee?</p>
+  <button class="quiz-opt">So the encoder runs on the queue’s thread and the tee never waits</button>
+  <button class="quiz-opt">So the valve runs on the queue’s thread and the tee never stalls</button>
+  <button class="quiz-opt">So the scaler runs on the tee’s thread and the queue never waits</button>
+  <p class="quiz-explain">The queue is the thread boundary: everything downstream of it — valve, scale, encode, sink — runs on the queue’s private src thread. The tee’s push just fills a buffer and returns.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. What happened to sd’s output file during the drop window?</p>
+  <button class="quiz-opt">It kept growing slowly as the valve leaked stale frames</button>
+  <button class="quiz-opt">It briefly shrank because the valve rewound while dropping</button>
+  <button class="quiz-opt">It stayed byte-exact frozen for the entire drop window</button>
+  <p class="quiz-explain">481,104 B at t=3, t=5, t=6 — drop-all discards every buffer after the valve, with zero leakage. That determinism is what makes drop a safe runtime operation.</p>
+</div>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">3. What does a mid-run drop mean for that profile’s consumer?</p>
+  <button class="quiz-opt">It receives gaps and skips forward over the dropped range</button>
+  <button class="quiz-opt">It receives silence — a frozen last frame until the resume</button>
+  <button class="quiz-opt">It receives an EOS and must reconnect before resuming</button>
+  <p class="quiz-explain">The default <code>drop-mode=drop-all</code> swallows buffers <em>and</em> events: downstream just waits. No gaps, no EOS. Whether we want to change that for RTSP clients is the parked UX question from Lesson 2.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p>You have already read the pieces; this lesson is assembly. If you want the wider picture for what comes next, skim the <a href="https://gstreamer.freedesktop.org/documentation/gst-rtsp-server/index.html">GStreamer RTSP Server index</a> — the next lesson wires these same bins to RTSP media factories via <code>appsrc</code>.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li>Write <code>server/ProfileHost.hpp</code> / <code>.cpp</code>: owns the pipeline; builds <code>videotestsrc ! videoconvert ! capsfilter ! tee</code>; takes a list of profile configs; attaches one <code>ProfileBin</code> per profile (request pad + ghost pad link); exposes <code>setProfileDrop(name, drop)</code> and a clean shutdown. <code>labs/lab4-profile-host.cpp</code> is your reference — but write your own structure.</li>
+  <li>Smoke-run it for ~10 s with a throwaway main, printing both output sizes at the same checkpoints as the lab. You should reproduce: hd untouched, sd frozen byte-exact, sd resumes cleanly.</li>
+  <li>Add the new files to the <code>camera-server</code> target so they at least keep compiling with the project. Do <em>not</em> wire them into <code>Application</code> yet — and do not add the <code>--drop</code> CLI flag yet. That integration happens on top of a working, reviewed ProfileHost.</li>
+  <li>One design decision to make now, one sentence in your notes: does <code>setProfileDrop</code> take the profile <em>name</em> (string) or an index/handle? Your RTSP lesson and web API will both call it; the string is friendlier for CLI and HTTP, the handle is faster and type-safe. Neither is wrong — write down why you chose one.</li>
+</ol>
+
+<div class="ask-teacher">
+Before you wire <code>ProfileHost</code> into <code>Application</code>, have your teacher agent review your ProfileBin/ProfileHost for the traps we measured (valve construction, ghost pad ownership, queue placement, clock/state ordering). Cheap now, expensive later.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0003-bins-and-ghost-pads.html">Lesson 3 — Bins &amp; Ghost Pads: One Branch, One Box</a></span>
+  <span>Next: Lesson 5 — RTSP Media Factories &amp; appsrc <span class="small">(not yet written)</span></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
