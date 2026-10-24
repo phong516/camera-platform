@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference — GMainLoop, GMainContext &amp; Ownership</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Reference</p>
+<h1>Main Loop &amp; Ownership</h1>
+<p class="subtitle">What <code>g_main_loop_new / run / quit / unref</code> each do to the reference count, how the lab8 client is wired, and the shutdown patterns for the client and the RTSP server. Compressed from <a href="../lessons/0010-main-loop-ownership.html">Lesson 10</a>.</p>
+
+<div class="box rule">
+<span class="box-title">The one sentence</span>
+<p>A pointer is not an owner. <code>new</code> returns one owned reference; aliases copy only the address; <code>run</code> borrows with its own temporary reference; <code>quit</code> stops but does not free; <code>unref</code> decrements and frees at zero. One owned ref → exactly one unref.</p>
+</div>
+
+<h2>API ledger</h2>
+<table>
+<tr><th>Call</th><th>Ref effect</th><th>What it does / notes</th></tr>
+<tr><td><code>g_main_loop_new(ctx, FALSE)</code></td><td class="num">+1 — yours</td><td>Allocates the loop; refs <code>ctx</code> (or the global default if <code>NULL</code>). Caller owns the return (<a href="https://docs.gtk.org/glib/ctor.MainLoop.new.html">docs</a>).</td></tr>
+<tr><td><code>g_main_loop_ref(loop)</code></td><td class="num">+1</td><td>Adds an owner. The returned pointer is the same object (<a href="https://docs.gtk.org/glib/method.MainLoop.ref.html">docs</a>).</td></tr>
+<tr><td><code>g_main_loop_run(loop)</code></td><td class="num">borrow</td><td>Iterates until <code>quit</code>. GLib takes a temporary ref for the call and drops it on return, so your ref count is unchanged (<a href="https://gitlab.gnome.org/GNOME/glib/-/blob/main/glib/gmain.c#L4817">gmain.c</a>).</td></tr>
+<tr><td><code>g_main_loop_quit(loop)</code></td><td class="num">0</td><td>Sets <code>is_running = FALSE</code>, wakes the context; <code>run</code> returns. Does not free (<a href="https://docs.gtk.org/glib/method.MainLoop.quit.html">docs</a>).</td></tr>
+<tr><td><code>g_main_loop_unref(loop)</code></td><td class="num">−1</td><td>At zero: frees the loop and drops its context reference (<a href="https://docs.gtk.org/glib/method.MainLoop.unref.html">docs</a>).</td></tr>
+<tr><td><code>g_main_loop_get_context(loop)</code></td><td class="num">0</td><td>Borrowed pointer; do not unref it.</td></tr>
+</table>
+
+<h2>Two objects, not one</h2>
+<table>
+<tr><th>Object</th><th>Role</th><th>Owned by</th></tr>
+<tr><td><code>GMainContext</code></td><td>Queue of event sources: timers, fd watches, RTSP server sockets</td><td>Whoever called <code>g_main_context_new()</code>; also referenced by every loop using it</td></tr>
+<tr><td><code>GMainLoop</code></td><td>Run/quit controller that iterates one context</td><td>The caller of <code>g_main_loop_new()</code></td></tr>
+<tr><td><code>GSource</code></td><td>One timeout/idle/fd source (<code>g_timeout_add</code>)</td><td>The context; callbacks run when it is iterated</td></tr>
+</table>
+<p class="small">A context can only run in one thread at a time. Sources can be added/removed from other threads; the context's API is thread-safe. Source: <a href="https://docs.gtk.org/glib/main-loop.html">The Main Event Loop</a>.</p>
+
+<h2>The lab8 client in one screen</h2>
+<pre><code><span class="c">// media path — count access units, do not decode</span>
+rtspsrc latency=0 protocols=tcp ! rtph264depay ! h264parse
+  ! appsink emit-signals=true sync=false name=sink
+
+<span class="c">// app wiring</span>
+sink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");  <span class="c">// full ref</span>
+g_signal_connect(sink, "new-sample", on_new_sample, NULL); <span class="c">// streaming thread</span>
+g_signal_connect(sink, "eos", on_eos, NULL);               <span class="c">// streaming thread</span>
+gst_object_unref(sink);
+
+loop = g_main_loop_new(NULL, FALSE);   <span class="c">// one owned ref, default context</span>
+g_timeout_add(500, report, NULL);      <span class="c">// main thread</span>
+g_timeout_add(secs * 1000, quit_timeout, loop);
+gst_element_set_state(pipeline, GST_STATE_PLAYING);
+g_main_loop_run(loop);
+g_main_loop_unref(loop);               <span class="c">// free after run returns</span>
+gst_element_set_state(pipeline, GST_STATE_NULL);
+gst_object_unref(pipeline);</code></pre>
+<table>
+<tr><th>Callback</th><th>Thread</th><th>Work</th></tr>
+<tr><td><code>new-sample</code></td><td>streaming</td><td><code>gst_app_sink_pull_sample()</code> → <code>count++</code> → <code>gst_sample_unref()</code></td></tr>
+<tr><td><code>eos</code></td><td>streaming</td><td>set flag, print, schedule quit (defer teardown off the streaming thread)</td></tr>
+<tr><td><code>report</code></td><td>main loop</td><td>print <code>count</code>; no lock in the lab</td></tr>
+<tr><td><code>quit_timeout / quit_after_eos</code></td><td>main loop</td><td><code>g_main_loop_quit()</code></td></tr>
+</table>
+<p class="small">Measured 4 s run: 90 samples = gen1's 90 buffers, 30 fps, EOS at +3886 ms. The <code>count</code> read/write is unsynchronized — fine for a lab, not for production.</p>
+
+<div class="box rule">
+<span class="box-title">Client vs server — where <code>appsrc</code> lives</span>
+<p><code>lab8client</code> is a consumer only: <code>rtspsrc → rtph264depay → h264parse → appsink</code>. It has no <code>appsrc</code>. The server (<code>labs/lab8-rtsp-recover.cpp</code>) owns both halves of the bridge: the producer pipeline <code>videotestsrc → x264enc → appsink(psink)</code>, and the RTSP media pipeline <code>appsrc(vsrc) → h264parse → rtph264pay</code>. The media — and therefore <code>vsrc</code> — is created on the first viewer; <code>media-configure</code> finds it by name, and the producer's <code>new-sample</code> callback restamps and pushes each buffer into it. No viewer = no <code>appsrc</code>; producer samples are dropped. No server = the client prints <code>samples=0</code> and exits silently (it never polls the bus).</p>
+</div>
+
+<h2>Correct patterns (copy-paste)</h2>
+<pre><code><span class="c">// 1. client / any process using the default context</span>
+GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+<span class="c">/* add sources */</span>
+g_main_loop_run(loop);
+g_main_loop_unref(loop);
+
+<span class="c">// 2. server with a private context (lab5-rtsp-server.cpp)</span>
+GMainContext *ctx = g_main_context_new();          <span class="c">// your ref</span>
+GMainLoop *loop = g_main_loop_new(ctx, FALSE);     <span class="c">// loop's ref on ctx</span>
+gst_rtsp_server_attach(server, ctx);               <span class="c">// adds server sources</span>
+g_main_loop_run(loop);
+g_main_loop_unref(loop);                           <span class="c">// drops loop + its ctx ref</span>
+g_main_context_unref(ctx);                         <span class="c">// drops your ctx ref</span>
+
+<span class="c">// 3. server on the default context (lab8-rtsp-recover.cpp)</span>
+gst_rtsp_server_attach(server, NULL);               <span class="c">// default context</span>
+GMainLoop *loop = g_main_loop_new(NULL, FALSE);    <span class="c">// same context</span>
+g_main_loop_run(loop);
+g_main_loop_unref(loop);                           <span class="c">// no ctx unref: none owned</span></code></pre>
+
+<h2>Traps</h2>
+<table>
+<tr><th>Symptom</th><th>Cause / fix</th></tr>
+<tr><td>LSan: “16 byte(s) leaked … g_main_loop_new”</td><td>Missing <code>g_main_loop_unref</code>. At 16 bytes it is exactly the loop struct. Cosmetic at process exit, real on a server shutdown path.</td></tr>
+<tr><td><code>GLib-CRITICAL: g_main_loop_unref: assertion 'ref_count &gt; 0' failed</code></td><td>Unref'd more times than owned. Count refs, not pointers; <code>run</code> does not consume yours.</td></tr>
+<tr><td>Use-after-free in a timeout callback</td><td>Source outlived the loop. Keep the <code>guint</code> from <code>g_timeout_add</code> and <code>g_source_remove()</code> before <code>unref</code>; or attach to a private context and destroy it last. <a href="https://docs.gtk.org/glib/main-loop.html#memory-management-of-sources">Docs</a>.</td></tr>
+<tr><td>Second GLib loop in the GUI thread</td><td>Qt/GTK own the main thread's loop. Integrate a <code>GMainContext</code> or run GLib loop on a dedicated thread; do not block the GUI loop.</td></tr>
+<tr><td>RTSP server accepts nothing</td><td><code>gst_rtsp_server_attach()</code> only adds sources to a context. The context must be iterated — <code>g_main_loop_run()</code> is what makes the server live.</td></tr>
+<tr><td>Per-profile loop</td><td>One loop + one context per application (or per dedicated thread). Profiles share the host's loop; they are not event-loop owners.</td></tr>
+</table>
+
+<h2>Why the local unref is the same call as the global</h2>
+<pre><code>GMainLoop *mloop_local = g_main_loop_new(NULL, FALSE);  <span class="c">// ref 1 (yours)</span>
+mloop = mloop_local;                                    <span class="c">// alias, no ref</span>
+g_main_loop_run(mloop);                                 <span class="c">// +1 then -1 internally</span>
+g_main_loop_unref(mloop_local);                         <span class="c">// -1 → free</span></code></pre>
+<p><code>g_main_loop_unref(mloop)</code> would be exactly the same decrement. The local is used because it is the owner variable; the global exists only so callbacks (which receive <code>gpointer</code>, not closures) can reach the loop. Better: pass the loop through signal/timeout user_data and delete the global.</p>
+
+<h2>Primary sources</h2>
+<ul>
+  <li><a href="https://docs.gtk.org/glib/main-loop.html">The Main Event Loop</a> — contexts, sources, and the memory-management section that motivates <code>g_source_remove()</code>.</li>
+  <li><a href="https://docs.gtk.org/glib/struct.MainLoop.html">GMainLoop</a> · <a href="https://docs.gtk.org/glib/struct.MainContext.html">GMainContext</a> — API contracts.</li>
+  <li><a href="https://gstreamer.freedesktop.org/documentation/app/appsink.html">appsink</a> — <code>new-sample</code> and <code>eos</code> are emitted from the streaming thread.</li>
+</ul>
+
+<div class="footer-nav">
+  <span><a href="../lessons/0010-main-loop-ownership.html">Lesson 10</a> · <a href="branching-cheatsheet.html">Branching cheat sheet</a></span>
+  <span><a href="https://discourse.gstreamer.org/c/app-dev/7">Ask the community</a></span>
+</div>
+
+</body>
+</html>

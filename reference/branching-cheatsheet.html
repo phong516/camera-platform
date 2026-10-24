@@ -10,7 +10,7 @@
 
 <p class="kicker">camera-platform · GStreamer · Reference</p>
 <h1>Branching Elements</h1>
-<p class="subtitle">tee, queue, valve, bin &amp; ghost pad, RTSP + appsrc bridge, recording &amp; recovery — the elements that fan out the camera-platform pipeline. Compressed from <a href="../lessons/0001-one-source-two-roads.html">Lesson 1</a> through <a href="../lessons/0009-latency-where-the-ms-go.html">Lesson 9</a>.</p>
+<p class="subtitle">tee, queue, valve, bin &amp; ghost pad, RTSP + appsrc bridge, recording &amp; recovery — the elements that fan out the camera-platform pipeline. Compressed from <a href="../lessons/0001-one-source-two-roads.html">Lesson 1</a> through <a href="../lessons/0010-main-loop-ownership.html">Lesson 10</a>.</p>
 
 <h2>The preroll gate <span class="small">(the one rule that explains most stalls)</span></h2>
 <div class="box warn">
@@ -114,7 +114,7 @@ t=9s  hd=2,856,054 B  sd=885,522 B   <span class="c"># no backlog burst on resum
 <tr><th>Item</th><th>Detail</th></tr>
 <tr><td>Objects</td><td><code>GstRTSPServer</code> (port, <code>set_service("8554")</code>) → <code>GstRTSPMountPoints</code> (<code>add_factory(mp, "/hd", f)</code>) → <code>GstRTSPMediaFactory</code> (launch string, <code>set_shared</code>) → <code>GstRTSPMedia</code> (per session)</td></tr>
 <tr><td>Launch string</td><td><code>"( videotestsrc is-live=true ! ... ! rtph264pay name=pay0 pt=96 config-interval=1 )"</code> — parens, payloader must be <code>pay0</code>, <code>config-interval=1</code> for late joiners</td></tr>
-<tr><td>Main loop</td><td><code>gst_rtsp_server_create_main_loop</code> is gone in 1.28: <code>GMainContext *ctx = g_main_context_new(); GMainLoop *loop = g_main_loop_new(ctx, FALSE); gst_rtsp_server_attach(server, ctx);</code></td></tr>
+<tr><td>Main loop</td><td><code>gst_rtsp_server_create_main_loop</code> is gone in 1.28: <code>GMainContext *ctx = g_main_context_new(); GMainLoop *loop = g_main_loop_new(ctx, FALSE); gst_rtsp_server_attach(server, ctx);</code> The loop must <em>run</em> for the server to accept clients; <code>attach(NULL)</code> uses the default context. Ownership: <a href="glib-main-loop.html">Main Loop &amp; Ownership</a>.</td></tr>
 <tr><td>Signals <span class="small">(GIR-verified)</span></td><td>server <code>client-connected</code> · client <code>closed</code> · factory <code>media-configure</code> (an RTSPMedia) · media <code>prepared</code>, <code>unprepared</code>, <code>new-state</code></td></tr>
 <tr><td>Lifetime</td><td>media built on demand; shared=TRUE shares among <em>concurrent</em> viewers (one encoder); destroyed with the last viewer — reconnect = fresh media + fresh <code>media-configure</code></td></tr>
 <tr><td>pkg-config</td><td><code>gstreamer-rtsp-server-1.0</code> — add <code>gstreamer-rtsp-1.0</code> the moment you touch <code>GstRTSPConnection</code></td></tr>
@@ -178,7 +178,7 @@ t=9s  hd=2,856,054 B  sd=885,522 B   <span class="c"># no backlog burst on resum
 
 <div class="footer-nav">
   <span><a href="../lessons/0001-one-source-two-roads.html">Lesson 1</a> · <a href="../lessons/0002-valve-the-switch.html">Lesson 2</a> · <a href="../lessons/0003-bins-and-ghost-pads.html">Lesson 3</a> · <a href="../lessons/0004-profile-host.html">Lesson 4</a> · <a href="../lessons/0005-rtsp-media-factories.html">Lesson 5</a> · <a href="../lessons/0006-appsink-appsrc-bridge.html">Lesson 6</a> · <a href="../lessons/0007-recording-and-snapshots.html">Lesson 7</a> · <a href="../lessons/0008-source-death-and-rebuild.html">Lesson 8</a> · <a href="../lessons/0009-latency-where-the-ms-go.html">Lesson 9</a></span>
-  <span><a href="https://discourse.gstreamer.org/c/app-dev/7">Ask the community</a></span>
+  <span><a href="glib-main-loop.html">Main loop &amp; ownership</a> · <a href="https://discourse.gstreamer.org/c/app-dev/7">Ask the community</a></span>
 </div>
 
 </body>

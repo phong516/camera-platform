@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 10 — The Loop You Own (and the Client That Measures)</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<p class="kicker">camera-platform · GStreamer · Lesson 0010</p>
+<h1>The Loop You Own</h1>
+<p class="subtitle">lab8's client is 82 lines of instrumentation: connect, count, report, quit. The line that looks wrong is <code>g_main_loop_unref(mloop_local)</code> — because <code>mloop</code> already “is” the main loop. Both facts are true; they are about different things: an address is not an owner.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> this client is the instrument that measured source death and rebuild in <a href="0008-source-death-and-rebuild.html">Lesson 8</a>. The loop it runs is the same kind of object your <code>RtspProfileServer</code> will run — so the ownership rule here is the rule that keeps the server's shutdown clean.
+</div>
+
+<h2>What the client actually does</h2>
+
+<div class="box rule">
+<span class="box-title">One sentence</span>
+<p><code>lab8client</code> connects to an RTSP mount, counts depayed H.264 access units as they arrive, prints the count every 500 ms, and exits after N seconds or shortly after EOS. It does not decode, display, reconnect, or handle bus errors.</p>
+</div>
+
+<p>The whole media path is one launch string in <a href="../labs/lab8-rtsp-client.cpp">labs/lab8-rtsp-client.cpp</a>:</p>
+
+<pre><code>rtspsrc location=... latency=0 protocols=tcp ! rtph264depay ! h264parse
+  ! appsink emit-signals=true sync=false name=sink</code></pre>
+
+<table>
+<tr><th>Piece</th><th>Job</th></tr>
+<tr><td><code>rtspsrc latency=0 protocols=tcp</code></td><td>Connect over TCP, no jitter buffer — loopback lab numbers, not a network measurement.</td></tr>
+<tr><td><code>rtph264depay ! h264parse</code></td><td>RTP packets → H.264 access units. One <code>new-sample</code> = one counted “frame”.</td></tr>
+<tr><td><code>appsink emit-signals=true sync=false</code></td><td>Emit <code>new-sample</code> from the streaming thread; deliver as soon as data arrives instead of waiting for the clock.</td></tr>
+<tr><td><code>gst_bin_get_by_name(..., "sink")</code></td><td>Find the sink (returns a full reference; the client unrefs it after connecting signals).</td></tr>
+<tr><td><code>on_new_sample</code></td><td><code>pull_sample</code> → <code>count++</code> → <code>gst_sample_unref</code>. Nothing else.</td></tr>
+<tr><td><code>on_eos</code></td><td>Set a flag, print the count, schedule a quit 200 ms later.</td></tr>
+<tr><td>Main loop</td><td>A 500 ms <code>report</code>, a quit at <code>secs</code>, and the EOS quit.</td></tr>
+</table>
+
+<p>That is the entire program. It is a counter with a clock — deliberately too dumb to hide server behavior. A real run against the lab8 server shows exactly what it is for:</p>
+
+<pre><code>$ ./lab8client rtsp://127.0.0.1:8554/cam 4
+[+  538ms] samples=0
+[+ 1039ms] samples=4
+[+ 1540ms] samples=19
+[+ 2040ms] samples=34
+[+ 2541ms] samples=49
+[+ 3042ms] samples=64
+[+ 3542ms] samples=79
+[+ 3886ms] EOS received after 90 samples
+[+ 4038ms] done: 90 samples total</code></pre>
+
+<p>15 samples per 500 ms = 30 fps; 90 samples = gen1's 90 buffers, exactly; EOS was delivered cleanly. The freeze-and-resume story in Lesson 8 was this same counter doing nothing for 2.5 s.</p>
+
+<h3>It needs the server (and the server owns <code>appsrc</code>)</h3>
+
+<p>Yes — <code>lab8client</code> is the probe for <a href="../labs/lab8-rtsp-recover.cpp">lab8-rtsp-recover.cpp</a>; run the server first, then the client. There is no <code>appsrc</code> in the client at all. The client is a consumer: <code>rtspsrc</code> receives RTP and ends in an <code>appsink</code>.</p>
+
+<p>Without a server it does not complain: it prints <code>samples=0</code> until the deadline and exits, because it never polls the bus. That is another deliberate simplification of the probe.</p>
+
+<p>The <code>appsrc</code> is the server's injection point, and it does not exist until a viewer connects. The factory launch string creates it on demand:</p>
+
+<pre><code><span class="c">// lab8-rtsp-recover.cpp — media built when the first client connects</span>
+( appsrc name=vsrc is-live=true do-timestamp=true ! h264parse
+  ! rtph264pay name=pay0 pt=96 config-interval=1 )</code></pre>
+
+<p>On <code>media-configure</code>, the server finds that element and stores it (<code>gst_bin_get_by_name(..., "vsrc")</code>). Its producer pipeline ends in a <em>different</em> appsink (<code>psink</code>); each sample is restamped and pushed into <code>vsrc</code>. So the whole system has two appsinks and one appsrc:</p>
+
+<pre class="diagram">SERVER (lab8-rtsp-recover)                          CLIENT (lab8client)
+videotestsrc → x264enc → appsink(psink)
+                           │ new-sample
+                           ▼
+                 restamp + gst_app_src_push_buffer
+                           │
+                     appsrc(vsrc) → h264parse → rtph264pay → RTSP/TCP
+                                                                   │
+                                                                   ▼
+                                                    rtspsrc → rtph264depay → h264parse
+                                                      → appsink(sink) → count++</pre>
+
+<p>With no client connected, the media (and therefore <code>appsrc</code>) does not exist; the producer still runs and its samples are dropped. Measured:</p>
+
+<pre><code>$ ~/cam-recon/lab8            <span class="c"># no client</span>
+[+   1ms] serving rtsp://127.0.0.1:8554/cam
+[+ 908ms] producer gen=1 started (90 buffers)
+[+3990ms] producer gen=1 hit EOS after 90 samples
+[+3991ms] no viewers connected, nothing to forward</code></pre>
+
+<h3>One loop, two threads</h3>
+
+<pre class="diagram">main thread                                   streaming thread
+───────────                                   ────────────────
+g_main_loop_run(mloop)                        rtspsrc → depay → parse → appsink
+  ├─ report() every 500 ms ── reads count ──┐
+  ├─ quit_timeout() at secs                 │  on_new_sample(): count++
+  └─ quit_after_eos() at EOS + 200 ms       │  on_eos(): flag + schedule quit
+                                            └─ both signals are emitted here</pre>
+
+<p>The appsink signals run on the <strong>streaming thread</strong> — the <a href="https://gstreamer.freedesktop.org/documentation/app/appsink.html">appsink docs</a> say so explicitly for <code>new-sample</code> and <code>eos</code>. The main loop is not what makes samples arrive; GStreamer's threads do that. The loop is where the client keeps time, reads the counter, and — importantly — decides to shut down from a safe thread.</p>
+
+<p>Why schedule the EOS quit instead of calling <code>g_main_loop_quit()</code> directly in <code>on_eos</code>? <code>quit</code> is thread-safe, but the teardown after <code>run</code> returns (<code>set_state(NULL)</code>, <code>unref(pipeline)</code>) is not something you want to do from inside a streaming-thread callback. Deferring to the main loop moves shutdown to the main thread.</p>
+
+<div class="box warn">
+<span class="box-title">Lab instrument, not production code</span>
+<p><code>count</code> is written by the streaming thread and read by the main loop with no mutex or atomic. On this machine an aligned <code>guint</code> read/write is benign in practice, but it is still a data race by the C memory model. In <code>camera-platform</code>, guard shared counters with a mutex or use <code>g_atomic_int_*</code>.</p>
+</div>
+
+<h2>Why unref at all?</h2>
+
+<p>Because <code>g_main_loop_new()</code> returns an <em>owned</em> reference. The GLib docs are literal about it: the caller “takes ownership of the data, and is responsible for freeing it” (<a href="https://docs.gtk.org/glib/ctor.MainLoop.new.html">g_main_loop_new</a>). <code>g_main_loop_unref()</code> drops that reference; at zero, “the loop and all associated memory are freed” (<a href="https://docs.gtk.org/glib/method.MainLoop.unref.html">g_main_loop_unref</a>).</p>
+
+<p><code>g_main_loop_run()</code> does not consume your reference. In fact, GLib's implementation takes its own temporary reference for the duration of the call — the source comment is “Hold a reference in case the loop is unreffed from a callback function” — and drops it before returning (<a href="https://gitlab.gnome.org/GNOME/glib/-/blob/main/glib/gmain.c#L4817">gmain.c, g_main_loop_run</a>). So the count goes: <strong>1</strong> (yours from <code>new</code>) → <strong>2</strong> during <code>run</code> → <strong>1</strong> when <code>run</code> returns. Your unref is still owed.</p>
+
+<p>The proof is a tiny experiment, <a href="../labs/lab-main-loop-refs.c">labs/lab-main-loop-refs.c</a>, built with AddressSanitizer so a missed unref is visible:</p>
+
+<pre><code><span class="c"># build</span>
+gcc -g -O0 -fsanitize=address,undefined labs/lab-main-loop-refs.c \
+    -o ~/cam-recon/looprefs $(pkg-config --cflags --libs glib-2.0)
+
+<span class="c"># create, run, unref — clean</span>
+$ ~/cam-recon/looprefs own
+  [run]  returned; is_running=0 (object is still alive)
+  [unref] refs we own=0 -&gt; freed
+
+<span class="c"># create, run, forget unref — LeakSanitizer names the line</span>
+$ ~/cam-recon/looprefs leak
+Direct leak of 16 byte(s) in 1 object(s) allocated from:
+    #2 ... in g_main_loop_new
+    #3 ... in main labs/lab-main-loop-refs.c:35
+SUMMARY: AddressSanitizer: 16 byte(s) leaked in 1 allocation(s).</code></pre>
+
+<p>16 bytes is the whole <code>GMainLoop</code> allocation (context pointer + running flag + refcount). The <code>own</code> run exits clean; the <code>leak</code> run exits with a leak report pointing at <code>g_main_loop_new</code>. At process exit the OS would reclaim it anyway — but the habit is what matters, and in a long-running server the loop is created and destroyed on the shutdown path, where leaks and use-after-free are real bugs.</p>
+
+<h2>Then why <code>mloop_local</code> and not <code>mloop</code>?</h2>
+
+<p>Because <code>mloop</code> is not a second reference. It is a second <em>pointer</em> to the same object:</p>
+
+<pre class="diagram">mloop_local ─┐
+             ├──▶  GMainLoop object   ref_count = 1
+mloop ───────┘</pre>
+
+<p>Only <code>g_main_loop_new()</code> increased the count. Assigning <code>mloop = mloop_local</code> copies an address, nothing more. One reference → one <code>g_main_loop_unref()</code>. You can pass either pointer to <code>unref</code>; the decrement is identical. The reason the code unrefs the local is discipline: <em>the variable that received the owned reference is the variable that releases it</em>. The global exists only so the callbacks can reach the loop — C has no closures, and <code>g_timeout_add</code>/<code>g_signal_connect</code> pass a bare <code>gpointer</code>.</p>
+
+<p>After <code>g_main_loop_unref(mloop_local)</code>, both pointers dangle. That is safe <em>here</em> because the next lines never touch the loop again: the process prints the total, sets the pipeline to NULL, and exits. If you added one more <code>g_timeout_add(..., mloop)</code> after the unref, you would have a use-after-free.</p>
+
+<p>Double-unref shows the difference between “unref” and “stop”:</p>
+
+<pre><code>$ ~/cam-recon/looprefs double
+  [unref 1] refs we own=0 -&gt; object freed here
+  [unref 2] calling unref again on the freed pointer
+GLib-CRITICAL: g_main_loop_unref: assertion 'g_atomic_int_get (&amp;loop-&gt;ref_count) &gt; 0' failed</code></pre>
+
+<p><code>g_main_loop_quit()</code> stops the run; it does not free anything (<a href="https://docs.gtk.org/glib/method.MainLoop.quit.html">quit docs</a>). <code>g_main_loop_unref()</code> frees at zero; it does not stop a running loop. Two verbs, two jobs.</p>
+
+<div class="box success">
+<span class="box-title">The rule</span>
+<p><strong>Count references, not pointers.</strong> <code>new</code> → you own 1. <code>ref</code> → +1. <code>run</code> → borrows (its own temporary ref), returns with your count unchanged. <code>quit</code> → state change, no ref. <code>unref</code> → −1, free at 0. Aliases add no references.</p>
+</div>
+
+<h2>The context is a second object (the server version)</h2>
+
+<p>“Main loop” is also used loosely for two objects. Keep them apart:</p>
+
+<table>
+<tr><th>Object</th><th>What it is</th><th>In the client</th></tr>
+<tr><td><code>GMainContext</code></td><td>The queue of event sources (timers, sockets)</td><td>The global default context; the loop holds a reference to it</td></tr>
+<tr><td><code>GMainLoop</code></td><td>The run/quit controller that iterates a context</td><td><code>mloop_local</code>, one owned reference</td></tr>
+<tr><td><code>GSource</code></td><td>One timer or fd watch (the two <code>g_timeout_add</code> calls)</td><td>Owned by the context; the lab never keeps their IDs</td></tr>
+</table>
+
+<p>The server version makes the two-object ownership visible. In <a href="../labs/lab5-rtsp-server.cpp">lab5-rtsp-server.cpp</a>:</p>
+
+<pre><code>GMainContext *context = g_main_context_new();       <span class="c">// ref 1: yours</span>
+GMainLoop *loop = g_main_loop_new(context, FALSE);  <span class="c">// loop takes its own context ref</span>
+gst_rtsp_server_attach(server, context);            <span class="c">// server adds sources to context</span>
+g_main_loop_run(loop);
+
+g_main_loop_unref(loop);       <span class="c">// drop the loop's ref (and its context ref)</span>
+g_main_context_unref(context); <span class="c">// drop YOUR context ref</span></code></pre>
+
+<p>Two objects, two refs you own. Unref only the loop and your context ref leaks; unref only the context and the loop's ref keeps it alive. (The loop constructor really does <code>g_main_context_ref()</code> — see <a href="https://gitlab.gnome.org/GNOME/glib/-/blob/main/glib/gmain.c#L4744">gmain.c, g_main_loop_new</a>.)</p>
+
+<p>In <a href="../labs/lab8-rtsp-recover.cpp">lab8-rtsp-recover.cpp</a> both calls pass <code>NULL</code>: <code>gst_rtsp_server_attach(server, NULL)</code> and <code>g_main_loop_new(NULL, FALSE)</code> share the global default context. That is why only the loop is unref'd there — nobody created a context to own.</p>
+
+<div class="box rule">
+<span class="box-title">Why running the loop matters for the server</span>
+<p><code>gst_rtsp_server_attach()</code> only <em>adds</em> the server's sources to a context. It does not run them. Until <code>g_main_loop_run()</code> iterates that context, the server accepts no connections. The loop is the app's heartbeat, not a GStreamer detail.</p>
+</div>
+
+<h2>The trap next door: sources outlive the loop</h2>
+
+<p>The client never stores the IDs returned by <code>g_timeout_add</code>, so the <code>report</code> source stays attached to the default context after the loop is freed. <code>quit_after_eos</code> stays attached too in a run where the fixed deadline wins (our 4 s run: EOS at 3886 ms schedules a quit for 4086 ms, but the 4000 ms deadline fires first). That pending callback still holds the old <code>mloop</code> pointer.</p>
+
+<p>Nothing dispatches that context again before <code>exit()</code>, so this lab is safe. In a process that keeps running — your server — it is exactly the use-after-free the GLib docs warn about. The recommended pattern is to store the source ID and “explicitly remove that source from the main context using <code>g_source_remove()</code> when the owning object is finalized” (<a href="https://docs.gtk.org/glib/main-loop.html#memory-management-of-sources">The Main Event Loop — memory management of sources</a>).</p>
+
+<p>Two more rules fall out of the same doc: a <code>GMainContext</code> “can only be running in a single thread”, and event sources are associated with a context, not with a loop. One loop, one context, one thread that runs it — per application, not per profile.</p>
+
+<h2>What this means for camera-platform</h2>
+<ul>
+  <li><strong>One loop for the app.</strong> <code>Application</code> should own it; <code>ProfileHost</code>, <code>ProfileBin</code> and <code>RtspProfileServer</code> borrow it. Creating a loop per profile would mean multiple threads iterating the same default context.</li>
+  <li><strong>Shutdown order:</strong> <code>quit</code> → <code>run</code> returns → stop/tear down pipelines and the RTSP server → remove your timer sources → <code>unref</code> the loop (and the private context, if you made one) last.</li>
+  <li><strong>Qt integration is an open design question.</strong> Qt has its own event loop; do not block it and do not run a second GLib loop on the GUI thread. The options are a GSource integration or a dedicated GLib thread that marshals to Qt. Bring a choice to the review — it is the same “who owns the loop?” question at a larger scale.</li>
+</ul>
+
+<div class="quiz">
+<h2>Check yourself</h2>
+
+<div class="quiz-q" data-answer="1">
+  <p class="quiz-prompt">1. What does <code>g_main_loop_run()</code> do to the one reference you own?</p>
+  <button class="quiz-opt">Consumes it, so the loop frees on return</button>
+  <button class="quiz-opt">Keeps it; you unref after the loop returns</button>
+  <button class="quiz-opt">Adds one; you must unref twice after return</button>
+  <p class="quiz-explain">GLib holds a temporary reference while running and drops it before returning. Your reference from <code>new</code> is untouched — so one unref is still owed.</p>
+</div>
+
+<div class="quiz-q" data-answer="2">
+  <p class="quiz-prompt">2. Why doesn't <code>mloop = mloop_local</code> create a second reference?</p>
+  <button class="quiz-opt">It creates a second owner for the loop</button>
+  <button class="quiz-opt">It increments the loop's own internal reference count</button>
+  <button class="quiz-opt">It copies the pointer, not the reference count</button>
+  <p class="quiz-explain">Assignment copies an address. Only <code>g_main_loop_ref()</code> (or <code>new</code>) changes the count; two names for one object still need exactly one unref.</p>
+</div>
+
+<div class="quiz-q" data-answer="0">
+  <p class="quiz-prompt">3. What happens if you unref the loop twice?</p>
+  <button class="quiz-opt">A GLib critical: the loop was already freed</button>
+  <button class="quiz-opt">A harmless second free; GLib ignores the repeat</button>
+  <button class="quiz-opt">A quit event followed by automatic object freeing</button>
+  <p class="quiz-explain">The first unref takes the count to zero and frees; the second trips the <code>ref_count &gt; 0</code> assertion. Unref is refcount math, not a stop button.</p>
+</div>
+</div>
+
+<h2>Read the primary source</h2>
+<p><a href="https://docs.gtk.org/glib/main-loop.html">GLib — The Main Event Loop</a>: read the whole page, then re-read “Memory management of sources”. That section is the source of the pending-source trap above. For the API contract, keep <a href="https://docs.gtk.org/glib/struct.MainLoop.html">GMainLoop</a> and <a href="https://docs.gtk.org/glib/struct.MainContext.html">GMainContext</a> open beside it. For the client half, the <a href="https://gstreamer.freedesktop.org/documentation/app/appsink.html">appsink signals</a> page states which thread emits <code>new-sample</code> and <code>eos</code>.</p>
+
+<h2>Your turn in the repo</h2>
+<ol>
+  <li><strong>Delete the global.</strong> Pass <code>mloop_local</code> through <code>g_signal_connect(sink, "eos", ..., mloop_local)</code> and the timeout user_data instead of the file-scope <code>mloop</code>. Run the same 4 s command; the log should be identical. This is the “C callbacks use user_data” lesson in one edit.</li>
+  <li><strong>Make the shutdown clean.</strong> Keep the <code>guint</code> ID of the repeating <code>report</code> timer and <code>g_source_remove()</code> it after <code>run</code> returns, before <code>g_main_loop_unref</code>; confirm with ASan. The one-shot quit timers remove themselves when they fire, but the EOS timer can still be pending in a deadline-wins run — handle it the same way, guarding against removing an ID that already fired (blind removal is a GLib critical).</li>
+  <li><strong>Write five lines in your design notes</strong> for <code>Application</code>: who creates the loop, who runs it, who quits it, and the shutdown order. That note is the thing to review before Qt integration — not the code yet.</li>
+</ol>
+
+<div class="ask-teacher">
+The natural next question is the Qt one: which event loop owns the app when the GUI arrives? Bring your `Application` ownership sketch and we'll design that seam before writing it. The `ProfileBin`/`ProfileHost`/`RtspProfileServer` review is still the gate for Lesson 11.
+</div>
+
+<div class="footer-nav">
+  <span>← <a href="0009-latency-where-the-ms-go.html">Lesson 9 — Where the Milliseconds Go</a></span>
+  <span>Next: Lesson 11 — Wiring It All Into Application <span class="small">(after your three files land)</span></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
