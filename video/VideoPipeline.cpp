@@ -2,41 +2,52 @@
 #include <initializer_list>
 #include <algorithm>
 
-VideoPipeline::~VideoPipeline()
+VideoPipeline::VideoPipeline(): m_videoSink(std::make_unique<AutoVideoSink>())
 {
-    cleanup();
 }
 
-bool VideoPipeline::setVideoSource(std::unique_ptr<VideoSource> source)
+VideoPipeline::~VideoPipeline()
+{
+    stop();
+}
+
+PipelineOutcome VideoPipeline::setVideoSource(std::unique_ptr<VideoSource> source)
 {
     m_videoSource.reset();
     m_videoSource = std::move(source);
-    return true;
+    return PipelineOutcome::success();
 }
 
-bool VideoPipeline::setupPipeline()
+PipelineOutcome VideoPipeline::setVideoSink(std::unique_ptr<VideoSink> sink)
+{
+    m_videoSink.reset();
+    m_videoSink = std::move(sink);
+    return PipelineOutcome::success();
+}
+
+PipelineOutcome VideoPipeline::setupPipeline()
 {
     if (isPipelineSetup())
     {
         g_critical("Pipeline is already set up. Please reset the pipeline before setting up a new one.");
-        return false;
+        return PipelineOutcome::failure("Pipeline is setup");
     }
     if (!m_videoSource)
     {
         g_critical("Video source is not set. Please set a video source before setting up the pipeline.");
-        return false;
+        return PipelineOutcome::failure("videoSource is not set");
     }
     m_source = m_videoSource->createElement();
     m_pipeline = gst_pipeline_new("video-pipeline");
     m_videoConvert = gst_element_factory_make("videoconvert", "video-convert");
     m_videoCaps = gst_element_factory_make("capsfilter", "video-caps");
-    m_videoSink = gst_element_factory_make("autovideosink", "video-sink");
+    m_sink = gst_element_factory_make("autovideosink", "video-sink");
 
     if (!isPipelineSetup())
     {
         g_critical("Failed to create GStreamer elements\n");
-        cleanup();
-        return false;
+        stop();
+        return PipelineOutcome::failure("Failed to create GStreamer elements");
     }
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
@@ -49,98 +60,112 @@ bool VideoPipeline::setupPipeline()
     g_object_set(m_videoCaps, "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    gst_bin_add_many(GST_BIN(m_pipeline), m_source, m_videoConvert, m_videoCaps, m_videoSink, NULL);
+    gst_bin_add_many(GST_BIN(m_pipeline), m_source, m_videoConvert, m_videoCaps, m_sink, NULL);
 
-    if (!gst_element_link_many(m_source, m_videoConvert, m_videoCaps, m_videoSink, NULL))
+    if (!gst_element_link_many(m_source, m_videoConvert, m_videoCaps, m_sink, NULL))
     {
         g_critical("Failed to link elements in the pipeline\n");
-        cleanup();
-        return false;
+        stop();
+        return PipelineOutcome::failure("Failed to link elements in the pipeline");
     }
 
-    return true;
+    return PipelineOutcome::success();
 }
 
-bool VideoPipeline::playPipeline()
+PipelineOutcome VideoPipeline::play()
 {
     if (!isPipelineSetup())
     {
         g_critical("Please setup pipeline first\n");
-        return false;
+        return PipelineOutcome::failure("Pipeline is not setup");
     }
 
     if (!isPipelineInState(GST_STATE_NULL, GST_STATE_READY, GST_STATE_PAUSED))
     {
         g_critical("Pipeline is not in a valid state to play\n");
-        return false;
+        return PipelineOutcome::failure("Invalid pipeline state for play");
     }
     GstStateChangeReturn ret = gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
         g_critical("Failed to set pipeline to PLAYING state\n");
-        return false;
+        return PipelineOutcome::failure("Failed to set pipeline to PLAYING state");
     }
-    return true;
+    return PipelineOutcome::success();
 }
 
-bool VideoPipeline::pausePipeline()
+PipelineOutcome VideoPipeline::pause()
 {
     if (!isPipelineSetup())
     {
         g_critical("Please setup pipeline first\n");
-        return false;
+        return PipelineOutcome::failure("Pipeline is not setup");
     }
     if (!isPipelineInState(GST_STATE_PLAYING))
     {
         g_critical("Pipeline is not in PLAYING state, cannot pause\n");
-        return false;
+        return PipelineOutcome::failure("Pipeline is not in PLAYING state, cannot pause");
     }
     GstStateChangeReturn ret = gst_element_set_state(m_pipeline, GST_STATE_PAUSED);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
         g_critical("Failed to set pipeline to PAUSED state\n");
-        return false;
+        return PipelineOutcome::failure("Failed to set pipeline to PAUSED state");
     }
-    return true;
+    return PipelineOutcome::success();
 }
 
-bool VideoPipeline::stopPipeline()
+PipelineOutcome VideoPipeline::stop()
 {
-    cleanup();
-    return true;
+    detachBusWatch();
+    if (m_pipeline)
+    {
+        gst_element_set_state(m_pipeline, GST_STATE_NULL);
+        gst_element_get_state(m_pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
+        gst_clear_object(&m_pipeline);
+        m_source = nullptr;
+        m_videoConvert = nullptr;
+        m_videoCaps = nullptr;
+        m_sink = nullptr;
+    }
+    gst_clear_object(&m_source);
+    gst_clear_object(&m_videoConvert);
+    gst_clear_object(&m_videoCaps);
+    gst_clear_object(&m_sink);
+    return PipelineOutcome::success();
 }
 
-bool VideoPipeline::seekPipeline(gint64 position)
+PipelineOutcome VideoPipeline::seek(gint64 position)
 {
     if (!isPipelineSetup())
     {
         g_critical("Please setup pipeline first\n");
-        return false;
+        return PipelineOutcome::failure("Pipeline is not setup");
     }
 
     if (!isPipelineInState(GST_STATE_PLAYING, GST_STATE_PAUSED))
     {
         g_critical("Pipeline is not in PLAYING or PAUSED state, cannot seek\n");
-        return false;
+        return PipelineOutcome::failure("Pipeline is not in PLAYING or PAUSED state, cannot seek");
     }
 
-    return gst_element_seek_simple(m_pipeline, GST_FORMAT_TIME, static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), position);
+    return gst_element_seek_simple(m_pipeline, GST_FORMAT_TIME, static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), position) ? PipelineOutcome::success() : PipelineOutcome::failure("Pipeline cannot be seeked");
 }
 
-bool VideoPipeline::setCapsProperty(const VideoCaps &caps)
+PipelineOutcome VideoPipeline::setCaps(const VideoCaps &caps)
 {
     m_caps = caps;
     if (!isPipelineSetup())
-        return true;
+        return PipelineOutcome::success();
 
     // Apply the caps to the videoCaps element if the pipeline is set up
     GstCaps *gstCaps = caps.toGstCaps();
     g_object_set(m_videoCaps, "caps", gstCaps, nullptr);
     gst_caps_unref(gstCaps);
-    return true;
+    return PipelineOutcome::success();
 }
 
-gint64 VideoPipeline::getCurrentPosition() const
+gint64 VideoPipeline::currentPosition() const
 {
     if (!isPipelineSetup())
     {
@@ -161,7 +186,7 @@ gint64 VideoPipeline::getCurrentPosition() const
     return duration;
 }
 
-gint64 VideoPipeline::getDuration() const
+gint64 VideoPipeline::duration() const
 {
     if (!isPipelineSetup())
     {
@@ -177,40 +202,30 @@ gint64 VideoPipeline::getDuration() const
     return duration;
 }
 
-GstElement *VideoPipeline::pipelineElement() const
-{
-    if (isPipelineSetup())
-    {
-        return m_pipeline;
-    }
-    return nullptr;
-}
-
-bool VideoPipeline::attachBusWatch(GMainContext *context, PipelineEventCallback callback)
+PipelineOutcome VideoPipeline::attachBusWatch(GMainContext *context, PipelineEventCallback callback)
 {
     if (!context || !callback)
     {
-        return false;
+        return PipelineOutcome::failure("Invalid context or callback");
     }
     if (!isPipelineSetup())
     {
-        return false;
+        return PipelineOutcome::failure("Pipeline is not setup");
     }
     detachBusWatch();
     GstBus *bus = gst_element_get_bus(m_pipeline);
     if (!bus)
-        return false;
+        return PipelineOutcome::failure("Failed to get bus from pipeline");
     m_busSource = gst_bus_create_watch(bus);
     if (!m_busSource)
     {
-        return false;
+        return PipelineOutcome::failure("Failed to create bus watch");
     }
-    setOnPipelineEvent(callback);
+    m_appCallback = callback;
     g_source_set_callback(m_busSource, &VideoPipeline::onBusMessageStatic, this, NULL);
     g_source_attach(m_busSource, context);
     gst_object_unref(bus);
-    m_appContext = context;
-    return true;
+    return PipelineOutcome::success();
 }
 
 void VideoPipeline::detachBusWatch()
@@ -223,84 +238,9 @@ void VideoPipeline::detachBusWatch()
     }
 }
 
-void VideoPipeline::setOnPipelineEvent(PipelineEventCallback callback)
-{
-    m_appCallback = callback;
-}
-
-bool VideoPipeline::pollBus()
-{
-    if (!isPipelineSetup())
-    {
-        g_critical("Please setup pipeline first\n");
-        return false;
-    }
-    if (!isPipelineInState(GST_STATE_PLAYING, GST_STATE_PAUSED))
-    {
-        g_critical("Pipeline is not in PLAYING or PAUSED state, cannot poll bus\n");
-        return false;
-    }
-    GstBus *bus = gst_element_get_bus(m_pipeline);
-    GstMessage *msg = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-    gst_object_unref(bus);
-    if (!msg)
-    {
-        return true;
-    }
-    m_lastError = gst_message_type_get_name(GST_MESSAGE_TYPE(msg));
-    gst_message_unref(msg);
-    return true;
-}
-
-std::string VideoPipeline::lastError() const
-{
-    return m_lastError;
-}
-
 bool VideoPipeline::isPipelineSetup() const
 {
-    return m_pipeline && m_source && m_videoConvert && m_videoCaps && m_videoSink;
-}
-
-bool VideoPipeline::cleanup()
-{
-    if (m_pipeline)
-    {
-        gst_element_set_state(m_pipeline, GST_STATE_NULL);
-        gst_clear_object(&m_pipeline);
-        m_source = nullptr;
-        m_videoConvert = nullptr;
-        m_videoCaps = nullptr;
-        m_videoSink = nullptr;
-        detachBusWatch();
-    }
-    else
-    {
-        cleanupSubElements();
-    }
-    return true;
-}
-
-bool VideoPipeline::cleanupSubElements()
-{
-    if (m_source)
-    {
-        gst_clear_object(&m_source);
-    }
-    if (m_videoConvert)
-    {
-        gst_clear_object(&m_videoConvert);
-    }
-    if (m_videoCaps)
-    {
-        gst_clear_object(&m_videoCaps);
-    }
-    if (m_videoSink)
-    {
-        gst_clear_object(&m_videoSink);
-    }
-
-    return true;
+    return m_pipeline && m_source && m_videoConvert && m_videoCaps && m_sink;
 }
 
 gboolean VideoPipeline::onBusMessageStatic(gpointer userData)
@@ -364,7 +304,7 @@ std::string VideoPipeline::parseMessage(GstMessage *msg, MessageParse parser)
 }
 
 template <typename... T>
-bool VideoPipeline::isPipelineInState(T... state) const
+bool VideoPipeline::isPipelineInState(T... states) const
 {
     if (!isPipelineSetup())
     {
@@ -378,7 +318,7 @@ bool VideoPipeline::isPipelineInState(T... state) const
         g_warning("Failed to get state\n");
         return false;
     }
-    GstState stateArray[] = {state...};
+    GstState stateArray[] = {states...};
     return std::any_of(std::begin(stateArray), std::end(stateArray), [currentState](GstState state)
                        { return state == currentState; });
 }

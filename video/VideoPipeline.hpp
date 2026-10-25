@@ -6,8 +6,8 @@
 
 #include <gst/gst.h>
 
-#include "video/VideoSink.hpp"
-#include "video/VideoSource.hpp"
+#include "VideoSink.hpp"
+#include "VideoSource.hpp"
 
 /// Result of every pipeline operation. The module's SINGLE error channel:
 /// `ok` is the judgment, `error` is the reason when false. No stderr side

@@ -3,6 +3,21 @@
 #include <iostream>
 #include <glib-unix.h>
 
+const std::vector<ProfileInfo> Application::kDefaultCatalog = {
+    {.name = "hd", .width = 1920, .height = 1080, .fps = 30, .bitrateKbps = 4000, .url = proto::rtspUrlFor(proto::kRtspPort, "hd")},
+    {.name = "sd", .width = 1280, .height = 720, .fps = 30, .bitrateKbps = 2000, .url = proto::rtspUrlFor(proto::kRtspPort, "sd")},
+    {.name = "low", .width = 854, .height = 480, .fps = 30, .bitrateKbps = 800, .url = proto::rtspUrlFor(proto::kRtspPort, "low")},
+    {.name = "thumb", .width = 640, .height = 360, .fps = 15, .bitrateKbps = 300, .url = proto::rtspUrlFor(proto::kRtspPort, "thumb")},
+};
+
+Application::Application()
+{
+    for (const ProfileInfo &profile : kDefaultCatalog)
+    {
+        m_profileEnabled[profile.name] = false;
+    }
+}
+
 Application::~Application()
 {
     stop();
@@ -42,9 +57,9 @@ bool Application::initialize(int argc, char **argv)
     {
         std::cerr << "Signal handlers not installed: Ctrl+C will use the default (kill) action." << std::endl;
     }
-    if (!m_pipeline.setVideoSource(std::move(videoSource)))
+    if (!m_pipeline.setVideoSource(std::move(videoSource)).ok)
         return false;
-    if (!m_pipeline.setupPipeline())
+    if (!m_pipeline.setupPipeline().ok)
         return false;
     if (!attachPipelineEvents())
         return false;
@@ -53,7 +68,7 @@ bool Application::initialize(int argc, char **argv)
 
 void Application::run()
 {
-    m_pipeline.playPipeline();
+    m_pipeline.play();
     if (m_mainLoop)
     {
         g_main_loop_run(m_mainLoop);
@@ -63,18 +78,12 @@ void Application::run()
 
 void Application::stop()
 {
-    m_pipeline.stopPipeline();
+    m_pipeline.stop();
     if (m_mainLoop)
     {
         g_main_loop_unref(m_mainLoop);
         m_mainLoop = nullptr;
     }
-}
-
-CameraState Application::cameraState() const
-{
-    std::lock_guard<std::mutex> lock(m_stateMutex);
-    return m_cameraState;
 }
 
 SystemStatus Application::systemStatus() const
@@ -83,36 +92,30 @@ SystemStatus Application::systemStatus() const
     return m_systemStatus;
 }
 
-bool Application::startCamera()
+std::vector<ProfileInfo> Application::profiles() const
 {
-    return false;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    std::vector<ProfileInfo> catalog{kDefaultCatalog};
+    for (ProfileInfo &profile : catalog)
+    {
+        const auto it = m_profileEnabled.find(profile.name);
+        const bool on = (it != m_profileEnabled.end() && it->second);
+        profile.state = on ? proto::kStateReady : proto::kStateOff;
+    }
+    return catalog;
 }
-bool Application::stopCamera()
+
+bool Application::setProfileEnabled(const std::string &name, bool enabled)
 {
-    return false;
-}
-bool Application::setResolution(std::uint32_t width, std::uint32_t height)
-{
-    if (width == 0 || height == 0)
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (!m_profileEnabled.count(name))
     {
         return false;
     }
-    std::lock_guard lock(m_stateMutex);
-    m_cameraState.width = width;
-    m_cameraState.height = height;
+    m_profileEnabled[name] = enabled;
     return true;
 }
-bool Application::setFrameRate(std::uint32_t fpsNum, std::uint32_t fpsDenom)
-{
-    if (fpsNum <= 0 || fpsDenom <= 0)
-    {
-        return false;
-    }
-    std::lock_guard lock(m_stateMutex);
-    m_cameraState.fpsNum = fpsNum;
-    m_cameraState.fpsDenom = fpsDenom;
-    return true;
-}
+
 bool Application::installSignalHandlers()
 {
     if (!m_context)
@@ -143,6 +146,7 @@ bool Application::installSignalHandlers()
     m_sigtermSource = attachSignalSource(SIGTERM);
     return m_sigintSource != nullptr && m_sigtermSource != nullptr;
 }
+
 void Application::requestStop()
 {
     if (m_mainLoop)
@@ -150,6 +154,7 @@ void Application::requestStop()
         g_main_loop_quit(m_mainLoop);
     }
 }
+
 bool Application::attachPipelineEvents()
 {
     // assume pipeline is setup
@@ -158,9 +163,8 @@ bool Application::attachPipelineEvents()
         return false;
     }
     if (!m_pipeline.attachBusWatch(m_context, [this](PipelineEvent event, const std::string &message)
-        {
-            onPipelineEvent(event, message);
-        }))
+                                   { onPipelineEvent(event, message); })
+             .ok)
     {
         return false;
     }
@@ -171,19 +175,19 @@ void Application::onPipelineEvent(PipelineEvent event, const std::string &messag
 {
     switch (event)
     {
-        case PipelineEvent::Error:
-            std::cerr << "Pipeline error: " << message << std::endl;
-            requestStop();
-            break;
-        case PipelineEvent::EndOfStream:
-            std::cout << "End of stream\n";
-            requestStop();
-            break;
-        case PipelineEvent::Warning:
-            std::cout << "Pipeline warning: " << message << std::endl;
-            break;
-        default:
-            break;
+    case PipelineEvent::Error:
+        std::cerr << "Pipeline error: " << message << std::endl;
+        requestStop();
+        break;
+    case PipelineEvent::EndOfStream:
+        std::cout << "End of stream\n";
+        requestStop();
+        break;
+    case PipelineEvent::Warning:
+        std::cout << "Pipeline warning: " << message << std::endl;
+        break;
+    default:
+        break;
     }
 }
 
