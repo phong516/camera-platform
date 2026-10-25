@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + test (linux)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+
+    env:
+      BUILD_DIR: build
+      CMAKE_BUILD_TYPE: RelWithDebInfo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The server needs GStreamer core + plugins-base + gst-rtsp-server.
+      # libgstrtspserver-1.0-dev is a separate source package from
+      # plugins-bad and provides gstreamer-rtsp-server-1.0.pc.
+      - name: Install GStreamer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstrtspserver-1.0-dev \
+            gstreamer1.0-plugins-base
+
+      - name: Show tool versions
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          pkg-config --modversion gstreamer-1.0 gstreamer-rtsp-server-1.0
+
+      # CAMERA_PLATFORM_WITH_QT=OFF builds the headless server and the tests.
+      # Ubuntu 26.04 does ship Qt 6.10.2 (qt6-base-dev + qt6-declarative-dev),
+      # so building client-qt/ is possible later: install those two packages and
+      # switch this to ON.
+      - name: Configure
+        run: |
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
+            -DCAMERA_PLATFORM_WITH_QT=OFF \
+            -DCAMERA_PLATFORM_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir "$BUILD_DIR" --output-on-failure
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log
+          path: ${{ env.BUILD_DIR }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
