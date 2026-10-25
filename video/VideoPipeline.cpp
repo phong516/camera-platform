@@ -41,7 +41,7 @@ PipelineOutcome VideoPipeline::setupPipeline()
     m_pipeline = gst_pipeline_new("video-pipeline");
     m_videoConvert = gst_element_factory_make("videoconvert", "video-convert");
     m_videoCaps = gst_element_factory_make("capsfilter", "video-caps");
-    m_sink = gst_element_factory_make("autovideosink", "video-sink");
+    m_sink = m_videoSink->createElement();
 
     if (!isPipelineSetup())
     {
@@ -51,7 +51,7 @@ PipelineOutcome VideoPipeline::setupPipeline()
     }
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
-                                        "format", G_TYPE_STRING, m_caps.format,
+                                        "format", G_TYPE_STRING, m_caps.format.c_str(),
                                         "width", G_TYPE_INT, m_caps.width,
                                         "height", G_TYPE_INT, m_caps.height,
                                         "framerate", GST_TYPE_FRACTION, m_caps.fps_num, m_caps.fps_denom,
