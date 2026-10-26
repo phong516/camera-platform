@@ -7,6 +7,7 @@
 set(CAMERA_SERVER_SOURCES
     main.cpp
     Application.cpp
+    ProfileBin.cpp
 )
 
 add_library(camera_server_lib STATIC

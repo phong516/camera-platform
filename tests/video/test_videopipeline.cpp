@@ -32,7 +32,7 @@ int main()
     {
         VideoPipeline fresh;
         VideoCaps caps;
-        caps.format = "RGB";
+        caps.format = "I420";
         caps.width = 1280;
         caps.height = 720;
         caps.fps_num = 25;

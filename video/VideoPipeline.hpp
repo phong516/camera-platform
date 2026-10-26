@@ -24,7 +24,7 @@ struct PipelineOutcome
 /// The resolution/format profile applied to the capsfilter.
 struct VideoCaps
 {
-    std::string format{"RGB"};
+    std::string format{"I420"};
     gint width{640};
     gint height{480};
     gint fps_num{30};

@@ -45,7 +45,7 @@ struct CameraState
     std::uint32_t height{480};
     std::uint32_t fpsNum{30};
     std::uint32_t fpsDenom{1};
-    std::string pixelFormat{"RGB"};
+    std::string pixelFormat{"I420"};
     std::int64_t uptimeMs{0};
     std::string lastError;
 };
