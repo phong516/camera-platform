@@ -31,6 +31,34 @@ target_link_libraries(test_videopipeline PRIVATE
 
 add_test(NAME video.videopipeline COMMAND test_videopipeline)
 
+add_executable(test_profilehost
+    server/test_profilehost.cpp
+)
+
+target_include_directories(test_profilehost PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_profilehost PRIVATE
+    camera_server_lib
+)
+
+add_test(NAME server.profilehost COMMAND test_profilehost)
+
+add_executable(test_profilebin
+    server/test_profilebin.cpp
+)
+
+target_include_directories(test_profilebin PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_profilebin PRIVATE
+    camera_server_lib
+)
+
+add_test(NAME server.profilebin COMMAND test_profilebin)
+
 # --- Uncomment once web/ApiController.cpp (and web/WebServer.cpp) exist: ---
 # add_executable(test_apicontroller
 #     web/test_apicontroller.cpp

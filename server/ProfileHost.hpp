@@ -9,8 +9,8 @@
 #include "model/Profile.hpp"
 #include "video/VideoPipeline.hpp"
 #include "video/VideoSource.hpp"
+#include "ProfileBin.hpp"
 
-class ProfileBin;
 
 /// Shared capture pipeline containing one tee branch per encoding profile.
 ///
@@ -40,7 +40,6 @@ public:
     ProfileBin *profile(const std::string &name) const;
 
 private:
-    std::vector<ProfileInfo> m_profiles;
     std::unique_ptr<VideoSource> m_videoSource;
     std::vector<std::unique_ptr<ProfileBin>> m_profileBins;
 
@@ -49,4 +48,7 @@ private:
     GstElement *m_videoConvert{nullptr};
     GstElement *m_sourceCaps{nullptr};
     GstElement *m_tee{nullptr};
+
+    void cleanup();
+    bool m_isLinked {false};
 };

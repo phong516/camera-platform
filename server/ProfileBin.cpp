@@ -52,11 +52,11 @@ GstElement *ProfileBin::createElement()
 
     gst_util_set_object_arg(G_OBJECT(enc), "speed-preset", "ultrafast");
     gst_util_set_object_arg(G_OBJECT(enc), "tune", "zerolatency");
-    gst_object_set(enc, "key-int-max", m_profile.fps, "bitrate", m_profile.bitrateKbps, NULL);
+    g_object_set(enc, "key-int-max", m_profile.fps, "bitrate", m_profile.bitrateKbps, NULL);
 
     setDrop(false);
 
-    gst_bin_add_many(m_bin, queue, m_valve, scale, capsFilter, enc, m_appSink, NULL);
+    gst_bin_add_many(GST_BIN(m_bin), queue, m_valve, scale, capsFilter, enc, m_appSink, NULL);
     if (!gst_element_link_many(queue, m_valve, scale, capsFilter, enc, m_appSink, NULL))
     {
         g_clear_object(&m_bin);
@@ -107,6 +107,3 @@ const ProfileInfo &ProfileBin::profile() const
     return m_profile;
 }
 
-void ProfileBin::clean()
-{
-}
