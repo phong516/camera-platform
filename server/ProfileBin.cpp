@@ -35,9 +35,9 @@ GstElement *ProfileBin::createElement()
 
     if (!m_bin || !m_valve || !m_appSink || !queue || !scale || !capsFilter || !enc)
     {
-        g_object_clear(&m_bin);
-        g_object_clear(&m_valve);
-        g_object_clear(&m_appSink);
+        g_clear_object(&m_bin);
+        g_clear_object(&m_valve);
+        g_clear_object(&m_appSink);
         return nullptr;
     }
 
@@ -59,7 +59,7 @@ GstElement *ProfileBin::createElement()
     gst_bin_add_many(m_bin, queue, m_valve, scale, capsFilter, enc, m_appSink, NULL);
     if (!gst_element_link_many(queue, m_valve, scale, capsFilter, enc, m_appSink, NULL))
     {
-        g_object_clear(&m_bin);
+        g_clear_object(&m_bin);
         m_valve = nullptr;
         m_appSink = nullptr;
         return nullptr;
