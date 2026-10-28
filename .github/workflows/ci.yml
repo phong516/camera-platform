@@ -30,6 +30,10 @@ jobs:
       # The server needs GStreamer core + plugins-base + gst-rtsp-server.
       # libgstrtspserver-1.0-dev is a separate source package from
       # plugins-bad and provides gstreamer-rtsp-server-1.0.pc.
+      #
+      # plugins-ugly provides x264enc, which ProfileBin.cpp instantiates at
+      # runtime (profile-bin: capsfilter -> x264enc -> appsink). Without it the
+      # factory make fails and every pipeline falls over.
       - name: Install GStreamer dependencies
         run: |
           sudo apt-get update
@@ -38,7 +42,14 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstrtspserver-1.0-dev \
-            gstreamer1.0-plugins-base
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-ugly
+
+      # Fail the job before building if the encoder the server depends on is
+      # missing from the plugin set.
+      - name: Check x264enc is present
+        run: |
+          gst-inspect-1.0 x264enc | head -5
 
       - name: Show tool versions
         run: |
