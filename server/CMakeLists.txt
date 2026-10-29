@@ -9,12 +9,14 @@ set(CAMERA_SERVER_SOURCES
     Application.cpp
     ProfileBin.cpp
     ProfileHost.cpp
+    RtspProfileServer.cpp
 )
 
 add_library(camera_server_lib STATIC
     Application.cpp
     ProfileBin.cpp
     ProfileHost.cpp
+    RtspProfileServer.cpp
 )
 
 # Repo-root-relative includes are the project convention (e.g.

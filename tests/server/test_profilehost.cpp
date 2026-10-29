@@ -1,11 +1,12 @@
 #include <gst/gst.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "server/ProfileBin.hpp"
 #include "server/ProfileHost.hpp"
 #include "tests/TestSupport.hpp"
+#include "video/TestVideoSource.hpp"
 
 int main()
 {
@@ -25,14 +26,20 @@ int main()
 
     ProfileHost host(std::vector<ProfileInfo>{hd, sd});
 
-    ProfileBin *hdBin = host.profile("hd");
-    ProfileBin *sdBin = host.profile("sd");
-    CHECK(hdBin != nullptr);
-    CHECK(sdBin != nullptr);
-    CHECK(host.profile("missing") == nullptr);
+    const std::vector<ProfileInfo> profiles = host.profiles();
+    CHECK(profiles.size() == 2);
+    CHECK(profiles[0].name == "hd");
+    CHECK(profiles[0].width == 1280);
+    CHECK(profiles[1].name == "sd");
+    CHECK(profiles[1].width == 640);
+    CHECK(host.appSinkForProfile("hd") == nullptr);
+    CHECK(host.appSinkForProfile("missing") == nullptr);
 
-    CHECK(hdBin->createElement() != nullptr);
-    CHECK(sdBin->createElement() != nullptr);
+    CHECK(host.setVideoSource(std::make_unique<TestVideoSource>()).ok);
+    CHECK(host.setupPipeline().ok);
+    CHECK(host.appSinkForProfile("hd") != nullptr);
+    CHECK(host.appSinkForProfile("sd") != nullptr);
+    CHECK(host.appSinkForProfile("missing") == nullptr);
     CHECK(host.profileEnabled("hd"));
     CHECK(host.profileEnabled("sd"));
 

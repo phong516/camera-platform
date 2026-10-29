@@ -3,6 +3,7 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <glib.h>
 
 #include <cstdint>
 #include <memory>
@@ -16,10 +17,10 @@ class ProfileHost;
 
 /// RTSP transport for the encoded buffers produced by ProfileHost.
 ///
-/// One shared GstRTSPServer owns one shared media factory per profile. Each
-/// factory exposes appsrc -> h264parse -> rtph264pay and receives encoded
-/// buffers from the matching ProfileBin appsink. Viewer lifecycle callbacks
-/// control the profile valve without changing the shared pipeline state.
+/// One shared GstRTSPServer owns one shared media factory per profile. Mount
+/// names come from ProfileHost::profiles(); encoded buffers come from the
+/// matching borrowed appsink. The host must outlive this server. Detach before
+/// destroying the host or the attached GMainContext.
 class RtspProfileServer
 {
 public:
@@ -32,13 +33,12 @@ public:
     RtspProfileServer(RtspProfileServer &&) = delete;
     RtspProfileServer &operator=(RtspProfileServer &&) = delete;
 
-    /// Adds the profile mounts and attaches the RTSP server to context.
-    PipelineOutcome attach(GMainContext *context);
+    /// Adds mounts and attaches to context. A second attach fails; detach is
+    /// safe to call more than once.
+    PipelineOutcome attach(GMainContext &context);
 
     /// Removes the server from its context and releases all RTSP objects.
     void detach();
-
-    GstRTSPServer *server() const;
 
 private:
     struct Mount;

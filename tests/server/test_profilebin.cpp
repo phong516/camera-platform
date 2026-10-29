@@ -5,7 +5,7 @@
 
 int main()
 {
-    gst_init(nullptr, nullptr);
+   gst_init(nullptr, nullptr);
 
     ProfileInfo profile;
     profile.name = "hd";

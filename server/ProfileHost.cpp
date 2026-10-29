@@ -22,7 +22,7 @@ PipelineOutcome ProfileHost::setVideoSource(std::unique_ptr<VideoSource> source)
 
 PipelineOutcome ProfileHost::setupPipeline()
 {
-    if (!m_source)
+    if (!m_videoSource)
     {
         return PipelineOutcome::failure("Video source not set");
     }
@@ -135,23 +135,9 @@ bool ProfileHost::profileEnabled(const std::string &name) const
     }
     return false;
 }
-
-GstElement *ProfileHost::pipeline() const
-{
-    return m_pipeline;
-}
-
-ProfileBin *ProfileHost::profile(const std::string &name) const
-{
-    auto it = std::find_if(m_profileBins.begin(), m_profileBins.end(), [&](const std::unique_ptr<ProfileBin> &profileBin)
-    {
-        return profileBin->profile().name == name;
-    });
-    if (it != m_profileBins.end())
-    {
-        return it->get();
-    }
-    return nullptr;
+std::vector<ProfileInfo> ProfileHost::profiles() const { return {}; }
+GstAppSink *ProfileHost::appSinkForProfile(const std::string &name) const {
+  return {};
 }
 
 void ProfileHost::cleanup()

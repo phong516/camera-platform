@@ -4,7 +4,9 @@
 
 #include "model/Profile.hpp"
 
-/// One encoded profile branch attached to ProfileHost's tee.
+/// Internal implementation of one encoded profile branch attached to
+/// ProfileHost's tee. Application callers should use ProfileHost by name;
+/// this interface is for ProfileHost and focused ProfileBin tests.
 ///
 /// The implementation owns the bin and its child elements. The bin exposes a
 /// single ghost sink pad and contains queue -> valve -> videoscale ->
@@ -21,10 +23,11 @@ public:
     ProfileBin(ProfileBin &&) = delete;
     ProfileBin &operator=(ProfileBin &&) = delete;
 
-    /// Builds and returns the bin owned by this object.
+    /// Builds and returns the bin owned by this object. Call once per instance.
     /// Returns nullptr when an element cannot be created or linked.
     GstElement *createElement();
 
+    /// Returns borrowed elements owned by this object.
     GstElement *element() const;
     GstElement *appSink() const;
 
