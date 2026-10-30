@@ -3,14 +3,12 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
-#include <glib.h>
 
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 #include "common/Protocol.hpp"
-#include "model/Profile.hpp"
 #include "video/VideoPipeline.hpp"
 
 class ProfileHost;
@@ -47,6 +45,7 @@ private:
     std::uint16_t m_port;
     GstRTSPServer *m_server{nullptr};
     std::vector<std::unique_ptr<Mount>> m_mounts;
+    GMainContext *m_context{nullptr}; // owns a ref while the server is attached
     guint m_attachId{0};
 
     static GstRTSPMediaFactory *createFactory(Mount *mount);

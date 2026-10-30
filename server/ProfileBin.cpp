@@ -1,4 +1,5 @@
 #include "ProfileBin.hpp"
+#include "gst/gstobject.h"
 
 ProfileBin::ProfileBin(ProfileInfo profile): m_profile(profile)
 {
@@ -24,7 +25,8 @@ ProfileBin::~ProfileBin()
 
 GstElement *ProfileBin::createElement()
 {
-    m_bin = gst_bin_new("profile-bin");
+    const std::string name = "profile-" + m_profile.name;
+    m_bin = gst_bin_new(name.c_str());
     m_valve = gst_element_factory_make("valve", "valve");
     m_appSink = gst_element_factory_make("appsink", "app-sink");
 
@@ -71,6 +73,7 @@ GstElement *ProfileBin::createElement()
     gst_object_unref(sinkPad);
     gst_element_no_more_pads(m_bin);
 
+    gst_object_ref_sink(m_bin);
     return m_bin;
 }
 

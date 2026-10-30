@@ -45,6 +45,20 @@ target_link_libraries(test_profilehost PRIVATE
 
 add_test(NAME server.profilehost COMMAND test_profilehost)
 
+add_executable(test_rtspprofileserver
+    server/test_rtspprofileserver.cpp
+)
+
+target_include_directories(test_rtspprofileserver PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_rtspprofileserver PRIVATE
+    camera_server_lib
+)
+
+add_test(NAME server.rtspprofileserver COMMAND test_rtspprofileserver)
+
 add_executable(test_profilebin
     server/test_profilebin.cpp
 )

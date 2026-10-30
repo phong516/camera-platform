@@ -1,4 +1,5 @@
 #include "ProfileHost.hpp"
+#include "gst/app/gstappsink.h"
 #include <algorithm>
 
 ProfileHost::ProfileHost(std::vector<ProfileInfo> profiles)
@@ -135,9 +136,27 @@ bool ProfileHost::profileEnabled(const std::string &name) const
     }
     return false;
 }
-std::vector<ProfileInfo> ProfileHost::profiles() const { return {}; }
-GstAppSink *ProfileHost::appSinkForProfile(const std::string &name) const {
-  return {};
+std::vector<ProfileInfo> ProfileHost::profiles() const
+{ 
+    std::vector<ProfileInfo> profileInfos {};
+    for (const auto& profileInfo: m_profileBins)
+    {
+       profileInfos.push_back(profileInfo->profile());
+    }
+    return profileInfos;
+}
+GstAppSink *ProfileHost::appSinkForProfile(const std::string &name) const
+{
+    GstAppSink *appSink {nullptr};
+    auto it = std::find_if(m_profileBins.begin(), m_profileBins.end(), [&](const std::unique_ptr<ProfileBin> &profileBin)
+    {
+        return profileBin->profile().name == name; 
+    });
+    if (it != m_profileBins.end())
+    {
+        appSink = GST_APP_SINK(it->get()->appSink());
+    }
+    return appSink;
 }
 
 void ProfileHost::cleanup()

@@ -326,7 +326,7 @@ bool VideoPipeline::isPipelineInState(T... states) const
 GstCaps *VideoCaps::toGstCaps() const
 {
     GstCaps *caps = gst_caps_new_simple("video/x-raw", 
-                                        "format", G_TYPE_STRING, format, 
+                                        "format", G_TYPE_STRING, format.c_str(), 
                                         "width", G_TYPE_INT, width,
                                         "height", G_TYPE_INT, height, 
                                         "framerate", GST_TYPE_FRACTION, fps_num, fps_denom, NULL);

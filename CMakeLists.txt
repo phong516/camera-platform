@@ -12,9 +12,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(GStreamer REQUIRED)
-# RTSP: the media plane. Used by server/ (Phase 2+). Failing here is fatal
-# because the server has no other transport.
-find_package(GStreamerRtspServer REQUIRED)
 
 # --- Layout -------------------------------------------------------------------
 #
