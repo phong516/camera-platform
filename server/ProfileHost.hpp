@@ -3,6 +3,7 @@
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,6 +40,15 @@ public:
     PipelineOutcome setProfileEnabled(const std::string &name, bool enabled);
     bool profileEnabled(const std::string &name) const;
 
+    /// PUSH events: installs a bus watch on `context` and reports every
+    /// ERROR/WARNING/EOS through `callback` on that context. Requires a set-up
+    /// pipeline; replaces any previous watch + callback. The watch follows the
+    /// bus through stop()/play(), and is detached by the destructor's
+    /// cleanup() before the pipeline element goes away - no event can fire
+    /// mid-teardown.
+    PipelineOutcome attachBusWatch(GMainContext *context, PipelineEventCallback callback);
+    void detachBusWatch();
+
     /// Returns profile configuration as values, independent of branch lifetime.
     std::vector<ProfileInfo> profiles() const;
 
@@ -59,4 +69,15 @@ private:
 
     void cleanup();
     bool m_isLinked {false};
+
+    // Bus watch (mirrors VideoPipeline's): plain-C++ events pushed to the
+    // caller's context, so Application never touches GstMessage/GstBus.
+    PipelineEventCallback m_appCallback{nullptr};
+    GSource *m_busSource{nullptr};
+
+    using MessageParse = std::function<void(GstMessage *, GError **, gchar **)>;
+
+    static gboolean onBusMessageStatic(gpointer userData);
+    void handleBusMessage(GstMessage *msg);
+    static std::string parseMessage(GstMessage *msg, MessageParse parser);
 };

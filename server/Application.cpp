@@ -1,4 +1,5 @@
 #include "server/Application.hpp"
+#include "VideoPipeline.hpp"
 #include "video/TestVideoSource.hpp"
 #include <iostream>
 #include <glib-unix.h>
@@ -7,14 +8,14 @@ const std::vector<ProfileInfo> Application::kDefaultCatalog = {
     {.name = "hd", .width = 1920, .height = 1080, .fps = 30, .bitrateKbps = 4000, .url = proto::rtspUrlFor(proto::kRtspPort, "hd")},
     {.name = "sd", .width = 1280, .height = 720, .fps = 30, .bitrateKbps = 2000, .url = proto::rtspUrlFor(proto::kRtspPort, "sd")},
     {.name = "low", .width = 854, .height = 480, .fps = 30, .bitrateKbps = 800, .url = proto::rtspUrlFor(proto::kRtspPort, "low")},
-    {.name = "thumb", .width = 640, .height = 360, .fps = 15, .bitrateKbps = 300, .url = proto::rtspUrlFor(proto::kRtspPort, "thumb")},
+    {.name = "thumb", .width = 640, .height = 360, .fps = 30, .bitrateKbps = 300, .url = proto::rtspUrlFor(proto::kRtspPort, "thumb")},
 };
 
-Application::Application()
+Application::Application(): m_host(kDefaultCatalog), m_rtsp(std::make_unique<RtspProfileServer>(m_host))
 {
     for (const ProfileInfo &profile : kDefaultCatalog)
     {
-        m_profileEnabled[profile.name] = false;
+        setProfileEnabled(profile.name, false);
     }
 }
 
@@ -57,18 +58,39 @@ bool Application::initialize(int argc, char **argv)
     {
         std::cerr << "Signal handlers not installed: Ctrl+C will use the default (kill) action." << std::endl;
     }
-    if (!m_pipeline.setVideoSource(std::move(videoSource)).ok)
-        return false;
-    if (!m_pipeline.setupPipeline().ok)
-        return false;
+    PipelineOutcome re {};
+    re = m_host.setVideoSource(std::move(videoSource));
+    if (!re.ok)
+    {
+        std::cerr << "Failed to set video source\n";
+        std::cerr << re.error;
+        return false; 
+    }
+    re = m_host.setupPipeline();
+    if (!re.ok)
+    {
+        std::cerr << "Failed to setup host pipeline source\n";
+        std::cerr << re.error;
+        return false; 
+    }
     if (!attachPipelineEvents())
-        return false;
+    {
+        std::cerr << "Failed to attach pipeline event\n";
+        return false; 
+    }
+    re = m_rtsp->attach(*m_context);
+    if (!re.ok)
+    {
+        std::cerr << "Failed to attach rtsp event\n";
+        std::cerr << re.error;
+        return false; 
+    }
     return true;
 }
 
 void Application::run()
 {
-    m_pipeline.play();
+    m_host.play();
     if (m_mainLoop)
     {
         g_main_loop_run(m_mainLoop);
@@ -78,7 +100,7 @@ void Application::run()
 
 void Application::stop()
 {
-    m_pipeline.stop();
+    m_host.stop();
     if (m_mainLoop)
     {
         g_main_loop_unref(m_mainLoop);
@@ -95,24 +117,16 @@ SystemStatus Application::systemStatus() const
 std::vector<ProfileInfo> Application::profiles() const
 {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    std::vector<ProfileInfo> catalog{kDefaultCatalog};
-    for (ProfileInfo &profile : catalog)
-    {
-        const auto it = m_profileEnabled.find(profile.name);
-        const bool on = (it != m_profileEnabled.end() && it->second);
-        profile.state = on ? proto::kStateReady : proto::kStateOff;
-    }
-    return catalog;
+    return m_host.profiles();
 }
 
 bool Application::setProfileEnabled(const std::string &name, bool enabled)
 {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (!m_profileEnabled.count(name))
+    if (!m_host.setProfileEnabled(name, enabled).ok)
     {
         return false;
     }
-    m_profileEnabled[name] = enabled;
     return true;
 }
 
@@ -162,7 +176,7 @@ bool Application::attachPipelineEvents()
     {
         return false;
     }
-    if (!m_pipeline.attachBusWatch(m_context, [this](PipelineEvent event, const std::string &message)
+    if (!m_host.attachBusWatch(m_context, [this](PipelineEvent event, const std::string &message)
                                    { onPipelineEvent(event, message); })
              .ok)
     {

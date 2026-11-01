@@ -73,6 +73,20 @@ target_link_libraries(test_profilebin PRIVATE
 
 add_test(NAME server.profilebin COMMAND test_profilebin)
 
+add_executable(test_application
+    server/test_application.cpp
+)
+
+target_include_directories(test_application PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_application PRIVATE
+    camera_server_lib
+)
+
+add_test(NAME server.application COMMAND test_application)
+
 # --- Uncomment once web/ApiController.cpp (and web/WebServer.cpp) exist: ---
 # add_executable(test_apicontroller
 #     web/test_apicontroller.cpp

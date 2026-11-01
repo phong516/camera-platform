@@ -1,5 +1,11 @@
 #include "ProfileHost.hpp"
+#include "VideoPipeline.hpp"
+#include "glib.h"
 #include "gst/app/gstappsink.h"
+#include "gst/gstbus.h"
+#include "gst/gstelement.h"
+#include "gst/gstmessage.h"
+#include "gst/gstobject.h"
 #include <algorithm>
 
 ProfileHost::ProfileHost(std::vector<ProfileInfo> profiles)
@@ -12,6 +18,7 @@ ProfileHost::ProfileHost(std::vector<ProfileInfo> profiles)
 
 ProfileHost::~ProfileHost()
 {
+    detachBusWatch();
     cleanup();
 }
 
@@ -136,6 +143,44 @@ bool ProfileHost::profileEnabled(const std::string &name) const
     }
     return false;
 }
+PipelineOutcome ProfileHost::attachBusWatch(GMainContext *context,
+                                            PipelineEventCallback callback)
+{
+    if (!context || !callback)
+    {
+        return PipelineOutcome::failure("Invalid context or callback");
+    }
+    if (!m_isLinked)
+    {
+        return PipelineOutcome::failure("Pipeline is not setup");
+    }
+    detachBusWatch();
+    GstBus *bus = gst_element_get_bus(m_pipeline);
+    if (!bus)
+    {
+        return PipelineOutcome::failure("Failed to get bus from pipeline");
+    }
+    m_busSource = gst_bus_create_watch(bus);
+    if (!m_busSource)
+    {
+        return PipelineOutcome::failure("Failed to create bus watch");
+    }
+    m_appCallback = callback;
+    g_source_set_callback(m_busSource, &ProfileHost::onBusMessageStatic, this, NULL);
+    g_source_attach(m_busSource, context);
+    gst_object_unref(bus);
+    return PipelineOutcome::success();
+}
+
+void ProfileHost::detachBusWatch()
+{
+    if (m_busSource)
+    {
+        g_source_destroy(m_busSource);
+        g_source_unref(m_busSource);
+        m_busSource = nullptr;
+    }
+}
 std::vector<ProfileInfo> ProfileHost::profiles() const
 { 
     std::vector<ProfileInfo> profileInfos {};
@@ -179,4 +224,64 @@ void ProfileHost::cleanup()
         gst_clear_object(&m_tee);
     }
     m_isLinked = false;
+}
+gboolean ProfileHost::onBusMessageStatic(gpointer userData)
+{ 
+    auto self = static_cast<ProfileHost *>(userData);
+    if (!self->m_busSource)
+    {
+        return G_SOURCE_CONTINUE;
+    }
+    GstBus *bus = gst_element_get_bus(self->m_pipeline);
+    GstMessage *msg = gst_bus_pop(bus);
+    gst_object_unref(bus);
+    if (msg)
+    {
+        self->handleBusMessage(msg);
+    }
+    gst_message_unref(msg);
+    return G_SOURCE_CONTINUE;
+}
+void ProfileHost::handleBusMessage(GstMessage *msg)
+{
+
+    if (!msg || !m_appCallback)
+    {
+        return;
+    }
+    switch (GST_MESSAGE_TYPE(msg))
+    {
+        case GST_MESSAGE_ERROR:
+        {
+            m_appCallback(PipelineEvent::Error, parseMessage(msg, &gst_message_parse_error));
+            break;
+        }
+        case GST_MESSAGE_WARNING:
+        {
+            m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_warning));
+            break;
+        }
+        case GST_MESSAGE_EOS:
+        {
+            m_appCallback(PipelineEvent::EndOfStream, "End of Stream");
+            break;
+        }
+        default:
+            break;
+    }
+}
+std::string ProfileHost::parseMessage(GstMessage *msg, MessageParse parser)
+{
+    GError *error{nullptr};
+    gchar *debug{nullptr};
+    parser(msg, &error, &debug);
+    std::string message = error ? error->message : "unknown";
+    if (debug)
+    {
+        message += ": ";
+        message += debug;
+    }
+    g_clear_error(&error);
+    g_free(debug);
+    return message;
 }
