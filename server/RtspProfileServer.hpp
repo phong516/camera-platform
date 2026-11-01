@@ -45,8 +45,7 @@ private:
     std::uint16_t m_port;
     GstRTSPServer *m_server{nullptr};
     std::vector<std::unique_ptr<Mount>> m_mounts;
-    GMainContext *m_context{nullptr}; // owns a ref while the server is attached
-    guint m_attachId{0};
+    GSource *m_source{nullptr};
 
     static GstRTSPMediaFactory *createFactory(Mount *mount);
     static void onMediaConfigure(GstRTSPMediaFactory *factory,
