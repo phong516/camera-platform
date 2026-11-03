@@ -3,6 +3,7 @@
 #include "video/TestVideoSource.hpp"
 #include <iostream>
 #include <glib-unix.h>
+#include <memory>
 
 const std::vector<ProfileInfo> Application::kDefaultCatalog = {
     {.name = "hd", .width = 1920, .height = 1080, .fps = 30, .bitrateKbps = 4000, .url = proto::rtspUrlFor(proto::kRtspPort, "hd")},
@@ -11,7 +12,7 @@ const std::vector<ProfileInfo> Application::kDefaultCatalog = {
     {.name = "thumb", .width = 640, .height = 360, .fps = 30, .bitrateKbps = 300, .url = proto::rtspUrlFor(proto::kRtspPort, "thumb")},
 };
 
-Application::Application(): m_host(kDefaultCatalog), m_rtsp(std::make_unique<RtspProfileServer>(m_host))
+Application::Application(): m_host(kDefaultCatalog)
 {
     for (const ProfileInfo &profile : kDefaultCatalog)
     {
@@ -73,6 +74,7 @@ bool Application::initialize(int argc, char **argv)
         std::cerr << re.error;
         return false; 
     }
+    m_rtsp = std::make_unique<RtspProfileServer>(m_host);
     if (!attachPipelineEvents())
     {
         std::cerr << "Failed to attach pipeline event\n";

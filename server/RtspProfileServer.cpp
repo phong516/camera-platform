@@ -1,18 +1,24 @@
 #include "RtspProfileServer.hpp"
 #include "ProfileHost.hpp"
 #include "VideoPipeline.hpp"
+#include "glib-object.h"
 #include "glib.h"
 #include "gst/app/gstappsink.h"
 #include "gst/app/gstappsrc.h"
 #include "gst/gstbin.h"
 #include "gst/gstbuffer.h"
 #include "gst/gstclock.h"
+#include "gst/gstelement.h"
+#include "gst/gstobject.h"
 #include "gst/gstpad.h"
 #include "gst/gstsample.h"
+#include "gst/rtsp-server/rtsp-server-object.h"
 #include <memory>
+#include <mutex>
 
 struct RtspProfileServer::Mount
 {
+	std::mutex mutex {};
 	std::string name {""};
 	GstAppSink *appSink {nullptr};
 	GstAppSrc *appSrc {nullptr};
@@ -37,12 +43,12 @@ RtspProfileServer::RtspProfileServer(ProfileHost &host, std::uint16_t port): m_h
 		gst_rtsp_media_factory_set_launch(mount->factory, launch);
 		gst_rtsp_media_factory_set_shared(mount->factory, TRUE);
 
-		g_signal_connect(mount->factory, "media-configure", G_CALLBACK(onMediaConfigure), (gpointer)&mount);
+		g_signal_connect(mount->factory, "media-configure", G_CALLBACK(onMediaConfigure), (gpointer)mount.get());
 
 		mount->appSink = m_host.appSinkForProfile(profile.name);
 		if (mount->appSink)
 		{
-			g_signal_connect(mount->appSink, "new-sample", G_CALLBACK(onNewSample), (gpointer)&mount);
+			g_signal_connect(mount->appSink, "new-sample", G_CALLBACK(onNewSample), (gpointer)mount.get());
 		}
 
 		gst_rtsp_mount_points_add_factory(mounts, ("/" + profile.name).c_str(), mount->factory);
@@ -89,8 +95,11 @@ void RtspProfileServer::onMediaConfigure(GstRTSPMediaFactory *factory,
                                          gpointer userData)
 {
 	Mount *mount = (Mount *)userData;
-	mount->appSrc = GST_APP_SRC(gst_bin_get_by_name(GST_BIN(media), "profile_src"));
-
+	std::lock_guard<std::mutex> lock(mount->mutex);
+	GstElement *bin = gst_rtsp_media_get_element(media);
+	mount->appSrc = GST_APP_SRC(gst_bin_get_by_name(GST_BIN(bin), "profile_src"));
+	gst_object_unref(bin);
+	
 	g_signal_connect(media, "prepared", G_CALLBACK(onMediaPrepared), userData);
 
 	g_signal_connect(media, "unprepared", G_CALLBACK(onMediaUnprepared), userData);
@@ -98,17 +107,23 @@ void RtspProfileServer::onMediaConfigure(GstRTSPMediaFactory *factory,
 void RtspProfileServer::onMediaPrepared(GstRTSPMedia *media,
                                         gpointer userData) 
 {
-	g_print("[server] Profile %s started serving\n", (const gchar *)userData);
+	Mount *mount = (Mount *)userData;
+	std::lock_guard<std::mutex> lock(mount->mutex);
+	g_print("[server] Profile %s started serving\n", mount->name.c_str());
 }
 void RtspProfileServer::onMediaUnprepared(GstRTSPMedia *media,
                                           gpointer userData)
 {
-	g_print("[server] Profile %s stopped serving\n", (const gchar *)userData);
+	Mount *mount = (Mount *)userData;
+	std::lock_guard<std::mutex> lock(mount->mutex);
+	g_clear_object(&mount->appSrc);
+	g_print("[server] Profile %s stopped serving\n", mount->name.c_str());
 }
 GstFlowReturn RtspProfileServer::onNewSample(GstAppSink *sink,
                                              gpointer userData) 
 {
 	Mount *mount = (Mount *)userData;
+	std::lock_guard<std::mutex> lock(mount->mutex);
 	GstSample *sample = gst_app_sink_pull_sample(sink);
 	if (sample == NULL)
 	{

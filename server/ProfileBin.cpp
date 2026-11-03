@@ -1,5 +1,6 @@
 #include "ProfileBin.hpp"
 #include "Protocol.hpp"
+#include "glib-object.h"
 #include "gst/gstobject.h"
 
 ProfileBin::ProfileBin(ProfileInfo profile): m_profile(profile)
@@ -56,6 +57,8 @@ GstElement *ProfileBin::createElement()
     gst_util_set_object_arg(G_OBJECT(enc), "speed-preset", "ultrafast");
     gst_util_set_object_arg(G_OBJECT(enc), "tune", "zerolatency");
     g_object_set(enc, "key-int-max", m_profile.fps, "bitrate", m_profile.bitrateKbps, NULL);
+
+    g_object_set(m_appSink, "emit-signals", TRUE, NULL);
 
     setDrop(false);
 
