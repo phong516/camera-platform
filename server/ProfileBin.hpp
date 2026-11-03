@@ -35,6 +35,7 @@ public:
     bool isDropped() const;
 
     const ProfileInfo &profile() const;
+    bool setState(const std::string &state, const std::string &lastError = {});
 
 private:
     ProfileInfo m_profile;

@@ -1,4 +1,5 @@
 #include "ProfileHost.hpp"
+#include "Protocol.hpp"
 #include "VideoPipeline.hpp"
 #include "glib.h"
 #include "gst/app/gstappsink.h"
@@ -128,6 +129,14 @@ PipelineOutcome ProfileHost::setProfileEnabled(const std::string &name, bool ena
         return PipelineOutcome::failure("Profile not found");
     }
     it->get()->setDrop(!enabled);
+    if (enabled)
+    {
+        it->get()->setState(proto::kStateReady);
+    }
+    else
+    {
+        it->get()->setState(proto::kStateOff);
+    }
     return PipelineOutcome::success();
 }
 

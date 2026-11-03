@@ -65,7 +65,7 @@ int main()
         CHECK_EQ(profiles[2].bitrateKbps, 800u);
         CHECK_EQ(profiles[3].width, 640u);
         CHECK_EQ(profiles[3].height, 360u);
-        CHECK_EQ(profiles[3].fps, 15u);
+        CHECK_EQ(profiles[3].fps, 30u);
         CHECK_EQ(profiles[3].bitrateKbps, 300u);
 
         // Every profile carries an absolute URL with its mount: the client

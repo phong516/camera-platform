@@ -1,4 +1,5 @@
 #include "ProfileBin.hpp"
+#include "Protocol.hpp"
 #include "gst/gstobject.h"
 
 ProfileBin::ProfileBin(ProfileInfo profile): m_profile(profile)
@@ -104,9 +105,19 @@ bool ProfileBin::isDropped() const
     }
     return drop;
 }
-
 const ProfileInfo &ProfileBin::profile() const
-{
-    return m_profile;
+{ 
+    return m_profile; 
 }
 
+bool ProfileBin::setState(const std::string &state,
+                          const std::string &lastError)
+{
+    if (state != proto::kStateOff && state != proto::kStateReady && state != proto::kStateLive && state != proto::kStateError)
+    {
+        return false;
+    }
+    m_profile.state = state;
+    m_profile.lastError = lastError;
+    return true;
+}
