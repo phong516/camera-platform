@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RTSP Playback in Qt Quick</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+  <p class="kicker">Camera Platform · Reference</p>
+  <h1>RTSP Playback in Qt Quick</h1>
+  <p class="subtitle">The URL enters a player; decoded frames enter the scene.</p>
+
+  <h2>Preferred first experiment</h2>
+  <pre><code>RTSP URL → Qt MediaPlayer → VideoOutput → QML scene graph</code></pre>
+  <p><code>MediaPlayer</code> owns playback and decoding through the selected Qt Multimedia backend. <code>VideoOutput</code> receives the video output and paints it as a Quick item. QML owns layout; it does not need to manipulate GStreamer objects.</p>
+
+  <pre><code>import QtQuick
+import QtMultimedia
+
+Item {
+    MediaPlayer {
+        id: player
+        source: "rtsp://127.0.0.1:8554/hd"
+        videoOutput: output
+        onErrorOccurred: (error, errorString) =&gt; console.error(errorString)
+    }
+
+    VideoOutput {
+        id: output
+        anchors.fill: parent
+        fillMode: VideoOutput.PreserveAspectFit
+    }
+
+    Component.onCompleted: player.play()
+    Component.onDestruction: player.stop()
+}</code></pre>
+
+  <h2>Build and verify</h2>
+  <ul>
+    <li>Add Qt Multimedia to the Qt components found by CMake and link <code>Qt6::Multimedia</code> to the client target.</li>
+    <li>Use an RTSP URL that is reachable from the client. The architecture's planned local profile URL is <code>rtsp://127.0.0.1:8554/hd</code>; the profile server is not implemented yet.</li>
+    <li>Check <code>errorString</code>, <code>hasVideo</code>, and <code>playbackState</code> on the actual Qt/backend/codec combination. A live stream may report <code>duration == 0</code>; that alone is not a failure.</li>
+    <li>Run the visual test on a machine/session with a working display. A headless server test cannot prove that QML rendered frames.</li>
+  </ul>
+
+  <h2>When to choose the other path</h2>
+  <p>Use GStreamer's <code>qml6glsink</code> only when direct pipeline control is worth adding GStreamer to the client. It inserts a Quick item into the scene graph and has OpenGL display/context ordering requirements. A custom <code>appsink</code>-fed <code>QQuickItem</code> is a lower-level fallback: the app must safely move frames from the streaming thread to Qt's render thread.</p>
+
+  <p class="small">Primary sources: <a href="https://doc.qt.io/qt-6/qml-qtmultimedia-mediaplayer.html">Qt MediaPlayer</a>, <a href="https://doc.qt.io/qt-6/qml-qtmultimedia-videooutput.html">Qt VideoOutput</a>, <a href="https://doc.qt.io/qt-6/qtmultimedia-index.html">Qt Multimedia overview</a>, and <a href="https://gstreamer.freedesktop.org/documentation/qml6/qml6glsink.html">GStreamer qml6glsink</a>.</p>
+  <p class="footer-nav"><a href="../lessons/0011-rtsp-frames-into-qml.html">Lesson 0011: RTSP frames into QML</a><a href="../docs/ARCHITECTURE-SERVER-CLIENT.md">Client/server architecture</a></p>
+</body>
+</html>

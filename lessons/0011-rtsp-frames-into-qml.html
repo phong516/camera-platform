@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RTSP Frames into QML</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+  <script defer src="../assets/quiz.js"></script>
+</head>
+<body>
+  <p class="kicker">Camera Platform · Lesson 0011</p>
+  <h1>RTSP Frames into QML</h1>
+  <p class="subtitle">The player decodes. The Quick scene presents.</p>
+  <div class="mission-strip"><strong>Your mission:</strong> show a selected camera profile in <code>CameraView.qml</code> without making the UI depend on the server's GStreamer pipeline.</div>
+
+  <h2>One boundary to keep clear</h2>
+  <p>RTSP carries the encoded media from the server to the client. The client still needs a player to receive the stream, negotiate its media, decode video, and hand frames to a renderer. QML's job is the last part: place that renderer in the scene.</p>
+  <pre class="diagram"><code>camera-profile ── RTSP/H.264 ──▶ MediaPlayer ── decoded frames ──▶ VideoOutput
+      server                         Qt Multimedia                 QML scene</code></pre>
+  <p>For the first experiment, use Qt Multimedia's <code>MediaPlayer</code> and <code>VideoOutput</code>. This fits the current architecture: the client speaks RTSP for media and HTTP for control; it does not link the server or reach into <code>VideoPipeline</code>. The exact RTSP support still depends on the Qt build, backend, codecs, and target platform, so a successful compile is not proof of playback.</p>
+
+  <h2>Smallest useful QML probe</h2>
+  <pre><code>import QtQuick
+import QtMultimedia
+
+Item {
+    MediaPlayer {
+        id: player
+        source: "rtsp://127.0.0.1:8554/hd"
+        videoOutput: output
+        onErrorOccurred: (error, errorString) =&gt; console.error(errorString)
+    }
+
+    VideoOutput {
+        id: output
+        anchors.fill: parent
+        fillMode: VideoOutput.PreserveAspectFit
+    }
+
+    Component.onCompleted: player.play()
+    Component.onDestruction: player.stop()
+}</code></pre>
+  <p>The URL above is the project's planned HD mount, not a working endpoint yet: the profile server is still ahead in the build. When you test against a real RTSP source, use an endpoint reachable from the client and check <code>errorString</code>, <code>hasVideo</code>, and <code>playbackState</code>. For live media, <code>duration == 0</code> is normal.</p>
+
+  <h2>Retrieval check</h2>
+  <div class="quiz">
+    <div class="quiz-q" data-answer="0">
+      <p class="quiz-prompt">Which QML item paints frames in the scene?</p>
+      <button class="quiz-opt">VideoOutput paints video frames</button>
+      <button class="quiz-opt">VideoOutput routes video frames</button>
+      <button class="quiz-opt">VideoOutput offers video frames</button>
+      <p class="quiz-explain" data-explain><code>VideoOutput</code> is the presentation item; the player handles stream playback and supplies its video output.</p>
+    </div>
+    <div class="quiz-q" data-answer="1">
+      <p class="quiz-prompt">What does a zero duration mean for a live stream?</p>
+      <button class="quiz-opt">Live streams may report position zero.</button>
+      <button class="quiz-opt">Live streams may report duration zero.</button>
+      <button class="quiz-opt">Live streams may report metadata zero.</button>
+      <p class="quiz-explain" data-explain>Live streams have no fixed end time, so duration zero by itself does not indicate a playback error.</p>
+    </div>
+  </div>
+
+  <h2>Your repo step</h2>
+  <p>Prototype this probe in <code>CameraView.qml</code> using a reachable RTSP URL. Add Qt Multimedia to the CMake components and link <code>Qt6::Multimedia</code>; then test the exact runtime backend and codec you plan to deploy. Only after the probe renders frames should you move the URL behind a typed C++ backend property and connect it to the selected profile.</p>
+  <p>Use the <a href="../reference/qml-rtsp-playback.html">RTSP playback reference</a> for the decision tree and the <a href="../docs/ARCHITECTURE-SERVER-CLIENT.md">client/server architecture</a> for the media/control boundary. For the next server-side exercise, revisit <a href="0010-main-loop-ownership.html">Lesson 0010</a>.</p>
+  <p class="ask-teacher">Ask me about any unclear part, or bring back the player's error string and we can trace where the stream stopped.</p>
+  <p class="footer-nav"><a href="0010-main-loop-ownership.html">← Lesson 0010</a><a href="../reference/qml-rtsp-playback.html">RTSP playback reference →</a></p>
+</body>
+</html>

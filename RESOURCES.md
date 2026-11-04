@@ -22,6 +22,16 @@
   Signal-level reference. Use for: which thread emits `new-sample` / `eos` (the streaming thread), `emit-signals`, `sync`, and queue limits.
 - [Official docs: appsrc](https://gstreamer.freedesktop.org/documentation/app/appsrc.html)
   Feeding an app-driven pipeline (the encoder→RTSP bridge). Use for: `is-live`, `block`, timestamp/caps handling in bridge code.
+- [Qt: MediaPlayer QML Type](https://doc.qt.io/qt-6/qml-qtmultimedia-mediaplayer.html)
+  Qt's high-level playback object. Use for: setting an RTSP source, starting playback, and inspecting playback errors and state.
+- [Qt: VideoOutput QML Type](https://doc.qt.io/qt-6/qml-qtmultimedia-videooutput.html)
+  QML scene-graph video presentation. Use for: attaching a `MediaPlayer` and choosing fit/crop behavior.
+- [Qt: Qt Multimedia overview](https://doc.qt.io/qt-6/qtmultimedia-index.html)
+  Module setup and platform/backend overview. Use for: adding `Qt6::Multimedia` and checking what media backend the target platform uses.
+- [Qt: GStreamer backend for Qt Multimedia](https://doc.qt.io/qt-6/qtmultimedia-gstreamer.html)
+  Embedded Linux backend notes, limitations, and customization points. Use for: investigating target-specific performance or backend behavior; not a promise that every RTSP source works.
+- [GStreamer: qml6glsink](https://gstreamer.freedesktop.org/documentation/qml6/qml6glsink.html)
+  Direct GStreamer-to-Qt Quick scene-graph sink. Use for: the alternative when direct pipeline control is needed, especially its OpenGL display/context ordering constraints.
 
 ## Wisdom (Communities)
 
@@ -35,3 +45,4 @@
 - No high-trust book or structured video course found yet — everything rests on official docs + Discourse. Acceptable for now; revisit if concepts feel disconnected.
 - No verified local (Vietnam) community or meetup surfaced. The user has not yet stated a preference on joining communities.
 - No high-trust source yet on integrating a `GMainContext` with Qt's event loop (GSource vs dedicated thread). Find one before the Qt integration lesson; GLib's Main Contexts tutorial is the starting point.
+- Qt documents the playback and rendering APIs, but RTSP/codec support varies with Qt version, media backend, and target build. Validate the actual stream on the deployment target before committing to the playback path.
