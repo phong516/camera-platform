@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "common/Protocol.hpp"
 #include "server/ProfileHost.hpp"
 #include "tests/TestSupport.hpp"
 #include "video/TestVideoSource.hpp"
@@ -51,6 +52,36 @@ int main()
     const PipelineOutcome enabled = host.setProfileEnabled("hd", true);
     CHECK(enabled.ok);
     CHECK(host.profileEnabled("hd"));
+    CHECK(host.profiles()[0].state == proto::kStateReady);
+
+    // RTSP media lifecycle seam: prepared -> live, unprepared -> ready. The
+    // update changes only the reported state, never the valve.
+    CHECK(host.setProfileState("hd", proto::kStateLive).ok);
+    CHECK(host.profiles()[0].state == proto::kStateLive);
+    CHECK(host.profileEnabled("hd"));
+
+    CHECK(host.setProfileState("hd", proto::kStateReady).ok);
+    CHECK(host.profiles()[0].state == proto::kStateReady);
+    CHECK(host.profileEnabled("hd"));
+
+    // error carries lastError, and the next non-error state clears it.
+    CHECK(host.setProfileState("hd", proto::kStateError, "encoder failed").ok);
+    CHECK(host.profiles()[0].state == proto::kStateError);
+    CHECK(host.profiles()[0].lastError == "encoder failed");
+
+    CHECK(host.setProfileState("hd", proto::kStateReady).ok);
+    CHECK(host.profiles()[0].state == proto::kStateReady);
+    CHECK(host.profiles()[0].lastError.empty());
+
+    // Unknown profile / unknown state are rejected without touching the profile.
+    const PipelineOutcome missingState = host.setProfileState("missing", proto::kStateLive);
+    CHECK(!missingState.ok);
+    CHECK(!missingState.error.empty());
+
+    const PipelineOutcome invalidState = host.setProfileState("hd", "unknown");
+    CHECK(!invalidState.ok);
+    CHECK(!invalidState.error.empty());
+    CHECK(host.profiles()[0].state == proto::kStateReady);
 
     const PipelineOutcome missing = host.setProfileEnabled("missing", true);
     CHECK(!missing.ok);

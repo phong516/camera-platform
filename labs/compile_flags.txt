@@ -1,0 +1,18 @@
+# clangd fallback for the labs: they are built manually with g++ + pkg-config
+# (see lessons/0005) and are NOT part of the CMake build, so there is no entry
+# for them in build/compile_commands.json. Without this file clangd falls back
+# to bare flags and reports every GstRTSP*/Gst* type as "unknown type name".
+#
+# Regenerate after a GStreamer upgrade with:
+#   pkg-config --cflags gstreamer-rtsp-server-1.0 gstreamer-rtsp-1.0 \
+#     gstreamer-1.0 gstreamer-app-1.0
+-I/usr/include/gstreamer-1.0
+-I/usr/include/gio-unix-2.0
+-I/usr/include/libmount
+-I/usr/include/blkid
+-I/usr/include/orc-0.4
+-I/usr/include/libdrm
+-I/usr/include/glib-2.0
+-I/usr/lib/x86_64-linux-gnu/glib-2.0/include
+-I/usr/include/sysprof-6
+-pthread

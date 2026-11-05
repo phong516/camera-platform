@@ -35,6 +35,7 @@ target_link_libraries(camera_platform_qml PUBLIC
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::QuickLayouts
+    Qt6::Multimedia       # MediaPlayer/VideoOutput for RTSP playback
     common
     model_lib
 )

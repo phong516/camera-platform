@@ -158,30 +158,63 @@ probe to disable a branch.
 
 ### 3.5 Profile state machine
 
-The server drives this; a client only reads it.
+The server drives this; a client only reads it. `state` describes availability and
+the RTSP media lifecycle, not GStreamer element state (section 3.1).
 
-| State | Branch | CPU | Entered when |
+| State | Meaning | Valve / CPU | Entered when |
 | --- | --- | --- | --- |
-| `off` | valve `drop=true` | ~0 | profile disabled, or 0 viewers |
-| `ready` | valve `drop=false`, no viewer | 1 encode | profile enabled, nobody watching |
-| `live` | valve `drop=false`, viewers attached | 1 encode | >=1 RTSP client on the mount |
+| `off` | disabled by the control plane; the mount is not intended for viewers | `drop=true`, ~0 | server starts; `POST .../off` |
+| `ready` | enabled and available, no RTSP media prepared | open or closed by policy | `POST .../on`; last viewer leaves (`media unprepared`) |
+| `live` | RTSP media prepared, at least one client on the mount | `drop=false`, 1 encode | first viewer attaches (`media prepared`) |
+| `error` | pipeline or encoder failure; `lastError` says why | unchanged | error on the pipeline bus |
 
-Note the deliberate difference from revision 1: because all profiles share one
-pipeline, a profile cannot enter a true `PAUSED`. `valve drop=true` gives the same
-CPU result (encoder not running) while the pipeline stays `PLAYING`.
+```text
+                 POST .../on
+        +---------------------------+
+        |                           v
+      off                         ready <----------+
+        ^                           |             |
+        |  POST .../off             | media       | media unprepared
+        +---------------------------+ prepared    | (last viewer leaves)
+                                    v             |
+                                  live -----------+
+```
 
-A profile with `drop=false` and no viewers still encodes and discards. That is wasted
-work, so **the server closes the valve whenever a profile's viewer count reaches
-zero** - which is exactly the pause-when-idle goal. The default is off-when-idle.
+Transition rules:
+
+- **`media prepared` -> `live`.** Fires when the shared RTSP media is prepared for
+  the first viewer. A second concurrent viewer of the same mount does not fire it
+  again; the profile is already `live`.
+- **`media unprepared` -> `ready`.** Fires when the last viewer leaves and the
+  shared media is torn down. If the profile was disabled while it was live, the
+  target is `off`, because `off` is the control-plane decision.
+- **`off` means disabled, not merely "zero viewers".** Zero viewers returns an
+  enabled profile to `ready`; only `POST .../off` moves it to `off`.
+- **`error` wins until the profile is turned on again.** A pipeline/encoder error
+  reports `error` + `lastError`; `POST .../on` clears it back to `ready`.
+- A reconnect after `unprepared` creates a new media object, so it goes
+  `ready -> live` again through a fresh `prepared`.
+
+The deliberate difference from revision 1: all profiles share one pipeline, so a
+profile cannot enter a true `PAUSED`; `valve drop=true` gives the same CPU result
+(encoder not running) while the pipeline stays `PLAYING`.
+
+**Valve policy is separate from state.** A `ready` profile can be pre-warmed
+(`drop=false`, 1 encode) or lazy (`drop=true`, ~0 CPU). The default is lazy: open
+the valve when media is prepared, close it when media is unprepared. That is the
+pause-when-idle goal, and it is why `ready` does not by itself imply CPU cost.
 
 ### 3.6 Two ways a profile becomes `live`
 
-- **Pre-warmed.** Valve opens when the process starts; the branch encodes from
-  startup. Tune-in is instant, but it burns CPU with nobody watching. Only for a
-  profile you always want hot.
+- **Pre-warmed.** Valve opens when the profile is enabled; the branch encodes from
+  startup and the profile sits in `ready` until the first viewer makes it `live`.
+  Tune-in is instant, but it burns CPU with nobody watching. Only for a profile you
+  always want hot.
 - **Lazy (recommended default).** Valve stays closed until the first viewer requests
-  the mount, then opens. Costs ~100-300 ms of settle time before the first frames
-  (measured in Phase 8), saves CPU the entire rest of the time.
+  the mount; `media prepared` opens it and moves the profile to `live`. When the
+  last viewer leaves, `media unprepared` closes it and moves the profile back to
+  `ready`. Costs ~100-300 ms of settle time before the first frames (measured in
+  Phase 8), saves CPU the entire rest of the time.
 
 Lazy is the default. Pre-warm at most one profile, and only if a fast first frame
 matters more than idle CPU.
@@ -486,8 +519,9 @@ per-profile-isolation question from section 4.2 revisited against real hardware.
 
 ## 9. Open questions
 
-1. **Auto-off vs manual.** Default is off-at-zero-viewers. Does the UI need a "keep
-   this profile hot" toggle for a profile the operator always wants ready?
+1. **Auto-off vs manual.** Default is lazy: the valve closes at zero viewers, but
+   the profile stays `ready` because it is still enabled. Does the UI need a "keep
+   this profile hot" toggle for a profile the operator always wants warm?
 2. **Viewer counting.** The simplest source is the RTSP server's client count per
    mount. Needs verification that `GstRtspServer` reports it reliably per mount.
 3. **Catalog source** - compiled-in defaults, an INI/JSON file, or generated units.

@@ -20,7 +20,10 @@
 /// profiles by name and receive profile metadata or a borrowed appsink for the
 /// RTSP adapter; they do not manage branch elements directly. The host keeps
 /// the pipeline PLAYING and changes profile activity through valve.drop; it
-/// never changes the state of an individual branch.
+/// never changes the GStreamer state of an individual branch. It also owns the
+/// reported ProfileInfo state: the control plane drives off/ready through
+/// setProfileEnabled(), and the RTSP adapter drives ready/live through
+/// setProfileState() as media is prepared and unprepared.
 class ProfileHost
 {
 public:
@@ -39,6 +42,16 @@ public:
 
     PipelineOutcome setProfileEnabled(const std::string &name, bool enabled);
     bool profileEnabled(const std::string &name) const;
+
+    /// Updates one profile's reported state without touching its valve. This is
+    /// the state-owner seam used by the RTSP adapter: media prepared -> live,
+    /// media unprepared -> ready. The control plane keeps using
+    /// setProfileEnabled() for off/ready. Returns failure for an unknown profile
+    /// or a state outside proto::kState*; a successful update replaces
+    /// lastError (empty for non-error states).
+    PipelineOutcome setProfileState(const std::string &name,
+                                    const std::string &state,
+                                    const std::string &lastError = {});
 
     /// PUSH events: installs a bus watch on `context` and reports every
     /// ERROR/WARNING/EOS through `callback` on that context. Requires a set-up

@@ -23,7 +23,9 @@
 ///   profile catalog served AS DATA - superseded.
 /// Phase 2 (now): the pipeline adapter is ProfileHost (tee + one valve-gated
 ///   branch per profile); setProfileEnabled() flips the live valve, profiles()
-///   reports valve state; RtspProfileServer serves the branches on their mounts.
+///   reports the off/ready/live state maintained by the host; RtspProfileServer
+///   serves the branches on their mounts and publishes ready <-> live as RTSP
+///   media is prepared and unprepared.
 /// Phase 3: constructs ApiController with *this, registers routes on a
 ///   WebServer bound to :8080 (proto::kControlPort).
 ///
@@ -44,12 +46,12 @@
 ///       systemStatus()/profiles(): take m_stateMutex, copy out, release.
 ///         Never hold it across a blocking GStreamer call (set_state/get_state).
 ///       setProfileEnabled(): delegates to host().setProfileEnabled() (the
-///         valve is the single source of truth, so there is no separate
-///         desired-state record); unknown name -> false, no change.
-///   - profiles(): host().profiles() (catalog values: geometry, url) merged
-///       with live valve state:
-///       state = host().profileEnabled(name) ? proto::kStateReady : kStateOff
-///       url from the catalog profile; url must exist even though no RTSP
+///         valve is the single source of truth for enabled/disabled, and the
+///         reported state follows it); unknown name -> false, no change.
+///   - profiles(): host().profiles() already carries catalog values
+///       (geometry, url) plus the live profile state: setProfileEnabled()
+///       drives off/ready, and RtspProfileServer moves ready <-> live from the
+///       media prepared/unprepared events. url must exist even though no RTSP
 ///       client is connected yet - the client contract (ARCHITECTURE section
 ///       6) makes it unconditional.
 ///   - The profile catalog itself is data, not code (ARCHITECTURE section 4):
@@ -59,12 +61,15 @@
 ///   - main thread: run() -> g_main_loop_run(); signal + bus + rtsp sources
 ///     fire here
 ///   - web thread: WebServer::run() -> ApiController -> CameraControl methods
-///   Shared state: m_systemStatus and m_host's valve state (setProfileEnabled/
-///   profileEnabled are not thread-safe on ProfileHost itself); every
-///   CameraControl call into m_host runs under m_stateMutex, which is never
-///   held across play()/stop() (blocking set_state). Lifecycle and the main
-///   loop are main-thread only. requestStop() is the only cross-thread entry
-///   point outside that (g_main_loop_quit is documented thread-safe).
+///   Shared state: m_systemStatus and m_host's profile state (valve + reported
+///   state; setProfileEnabled/profileEnabled/setProfileState are not thread-safe
+///   on ProfileHost itself). Every CameraControl call into m_host runs under
+///   m_stateMutex, which is never held across play()/stop() (blocking set_state).
+///   RtspProfileServer also publishes ready/live from media callbacks on the
+///   main thread; once Phase 3 reads profiles from the web thread, that write
+///   must go through the same lock (or be marshalled onto m_context). Lifecycle
+///   and the main loop are main-thread only. requestStop() is the only
+///   cross-thread entry point outside that (g_main_loop_quit is thread-safe).
 class Application : public CameraControl
 {
 public:

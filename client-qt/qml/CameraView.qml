@@ -30,8 +30,22 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtMultimedia
 
-Rectangle {
-    id: root
-    color: "black"
+Item {
+    MediaPlayer {
+        id: player
+        source: "rtsp://127.0.0.1:8554/hd"
+        videoOutput: output
+        onErrorOccurred: (error, errorString) => console.error(errorString)
+    }
+
+    VideoOutput {
+        id: output
+        anchors.fill: parent
+        fillMode: VideoOutput.PreserveAspectFit
+    }
+
+    Component.onCompleted: player.play()
+    Component.onDestruction: player.stop()
 }

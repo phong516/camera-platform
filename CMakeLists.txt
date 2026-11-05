@@ -55,6 +55,7 @@ if(NOT CAMERA_PLATFORM_WITH_QT STREQUAL "OFF")
         QuickControls2
         QuickLayouts
         Network
+        Multimedia
     )
 
     if(Qt6_FOUND)
@@ -78,8 +79,8 @@ if(NOT CAMERA_PLATFORM_WITH_QT STREQUAL "OFF")
             "-DCMAKE_PREFIX_PATH=<qt-prefix>")
     else()
         message(STATUS "Qt6 not found - building the server only. Install "
-                       "qt6-base-dev qt6-declarative-dev, or pass "
-                       "-DCMAKE_PREFIX_PATH=<qt-prefix>")
+                       "qt6-base-dev qt6-declarative-dev qt6-multimedia-dev, "
+                       "or pass -DCMAKE_PREFIX_PATH=<qt-prefix>")
     endif()
 endif()
 

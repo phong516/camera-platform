@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "common/Protocol.hpp"
@@ -20,6 +21,10 @@ class ProfileHost;
 /// names come from ProfileHost::profiles(); encoded buffers come from the
 /// matching borrowed appsink. The host must outlive this server. Detach before
 /// destroying the host or the attached GMainContext.
+///
+/// The server also translates RTSP media lifecycle into profile state:
+/// `prepared` -> live, `unprepared` -> ready. ProfileHost remains the state
+/// owner; this class only publishes those transitions through its interface.
 class RtspProfileServer
 {
 public:
@@ -47,6 +52,14 @@ private:
     GstRTSPServer *m_server{nullptr};
     std::vector<std::unique_ptr<Mount>> m_mounts;
     GSource *m_source{nullptr};
+
+    /// Publishes an RTSP-media lifecycle state to the mount's profile via
+    /// ProfileHost::setProfileState(). `prepared` callbacks pass
+    /// proto::kStateLive; `unprepared` callbacks pass proto::kStateReady (or
+    /// proto::kStateOff when the profile was disabled while live). Returns
+    /// false when the profile is unknown or the host rejects the state.
+    bool updateProfileState(const std::string &profileName,
+                            const std::string &state);
 
     static GstRTSPMediaFactory *createFactory(Mount *mount);
     static void onMediaConfigure(GstRTSPMediaFactory *factory,

@@ -25,9 +25,11 @@ const ProfileInfo *findProfile(const std::vector<ProfileInfo> &profiles,
 } // namespace
 
 /// Control-plane contract for Application (server/Application.hpp), phase 2:
-/// the catalog is data, the ProfileHost valve is the single source of truth,
-/// setProfileEnabled() delegates to it, profiles() merges live valve state
-/// on top of catalog values. Only "off"/"ready" are reachable.
+/// the catalog is data, the ProfileHost valve is the single source of truth
+/// for enabled/disabled, setProfileEnabled() delegates to it, and profiles()
+/// returns the state maintained by the host. Through CameraControl only
+/// "off"/"ready" are reachable here; RtspProfileServer publishes "live" when
+/// RTSP media is prepared (covered by test_profilehost + the media lifecycle).
 ///
 /// Sections 1 and 2 exercise a constructor-only Application: the assertions
 /// there must hold regardless of how the .cpp wires the host, so they check

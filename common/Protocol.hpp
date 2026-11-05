@@ -65,10 +65,15 @@ inline std::string profileActionPath(const std::string &name, const char *action
 // --- Profile state names ------------------------------------------------------
 
 /// Wire values for a profile's state, as reported in /api/profiles.
-///   off   - valve closed, no encoder work, ~0 CPU
-///   ready - valve open, nobody watching (encodes and discards - avoid)
-///   live  - valve open, at least one RTSP viewer
+///   off   - disabled by the control plane; valve closed, ~0 CPU
+///   ready - enabled, no RTSP media prepared (nobody watching); the valve may
+///           be open (pre-warmed) or closed (lazy), so CPU is policy-dependent
+///   live  - RTSP media prepared, at least one viewer on the mount
 ///   error - pipeline problem; see lastError
+///
+/// Lifecycle: POST on -> ready, RTSP media prepared -> live, RTSP media
+/// unprepared (last viewer leaves) -> ready, POST off -> off. See section 3.5
+/// of docs/ARCHITECTURE-SERVER-CLIENT.md.
 ///
 /// There is deliberately no "paused": all profiles share one pipeline, and a
 /// GStreamer pipeline has a single global state. See section 3.1 of

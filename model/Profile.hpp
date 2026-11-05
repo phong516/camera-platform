@@ -20,6 +20,8 @@
 ///
 /// SERVER-OWNED STATE: clients only ever read these values; on/off requests
 /// ask the server to change them (see the routes in common/Protocol.hpp).
+/// Lifecycle: control plane off <-> ready; RTSP media prepared -> live,
+/// media unprepared -> ready (docs/ARCHITECTURE-SERVER-CLIENT.md section 3.5).
 struct ProfileInfo
 {
     std::string name;                    ///< catalog key, e.g. "hd"

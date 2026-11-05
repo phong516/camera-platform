@@ -35,6 +35,11 @@ public:
     bool isDropped() const;
 
     const ProfileInfo &profile() const;
+
+    /// Replaces the reported state and lastError. This is the validation gate
+    /// for proto::kState*; callers reach it through ProfileHost, which owns the
+    /// lifecycle (control plane: off/ready, RTSP media: ready/live).
+    /// Returns false for an unknown state without changing the profile.
     bool setState(const std::string &state, const std::string &lastError = {});
 
 private:
