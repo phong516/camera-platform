@@ -11,7 +11,7 @@
 
 ProfileHost::ProfileHost(std::vector<ProfileInfo> profiles)
 {
-    for (const ProfileInfo& profile : profiles)
+    for (const ProfileInfo &profile : profiles)
     {
         m_profileBins.push_back(std::make_unique<ProfileBin>(profile));
     }
@@ -51,11 +51,9 @@ PipelineOutcome ProfileHost::setupPipeline()
         cleanup();
         return PipelineOutcome::failure("Failed to create GStreamer elements");
     }
-    
+
     GstCaps *defaultCaps = VideoCaps().toGstCaps();
-    g_object_set(m_sourceCaps,
-                 "caps", defaultCaps,
-                 NULL);
+    g_object_set(m_sourceCaps, "caps", defaultCaps, NULL);
     gst_caps_unref(defaultCaps);
 
     gst_bin_add_many(GST_BIN(m_pipeline), m_source, m_videoConvert, m_sourceCaps, m_tee, NULL);
@@ -120,10 +118,9 @@ PipelineOutcome ProfileHost::stop()
 
 PipelineOutcome ProfileHost::setProfileEnabled(const std::string &name, bool enabled)
 {
-    auto it = std::find_if(m_profileBins.begin(), m_profileBins.end(), [&](const std::unique_ptr<ProfileBin> &profileBin)
-    {
-        return profileBin->profile().name == name;
-    });
+    auto it =
+        std::find_if(m_profileBins.begin(), m_profileBins.end(),
+                     [&](const std::unique_ptr<ProfileBin> &profileBin) { return profileBin->profile().name == name; });
     if (it == m_profileBins.end())
     {
         return PipelineOutcome::failure("Profile not found");
@@ -142,18 +139,34 @@ PipelineOutcome ProfileHost::setProfileEnabled(const std::string &name, bool ena
 
 bool ProfileHost::profileEnabled(const std::string &name) const
 {
-    auto it = std::find_if(m_profileBins.begin(), m_profileBins.end(), [&](const std::unique_ptr<ProfileBin> &profileBin)
-    {
-        return profileBin->profile().name == name;
-    });
+    auto it =
+        std::find_if(m_profileBins.begin(), m_profileBins.end(),
+                     [&](const std::unique_ptr<ProfileBin> &profileBin) { return profileBin->profile().name == name; });
     if (it != m_profileBins.end())
     {
         return !it->get()->isDropped();
     }
     return false;
 }
-PipelineOutcome ProfileHost::attachBusWatch(GMainContext *context,
-                                            PipelineEventCallback callback)
+PipelineOutcome ProfileHost::setProfileState(const std::string &name, const std::string &state,
+                                             const std::string &lastError)
+{
+    if (state != proto::kStateError && state != proto::kStateReady && state != proto::kStateOff &&
+        state != proto::kStateLive)
+    {
+        return PipelineOutcome::failure("Set invalid state");
+    }
+    auto it =
+        std::find_if(m_profileBins.begin(), m_profileBins.end(),
+                     [&](const std::unique_ptr<ProfileBin> &profileBin) { return profileBin->profile().name == name; });
+    if (it == m_profileBins.end())
+    {
+        return PipelineOutcome::failure("Profile not found");
+    }
+    it->get()->setState(state, lastError);
+    return PipelineOutcome::success();
+}
+PipelineOutcome ProfileHost::attachBusWatch(GMainContext *context, PipelineEventCallback callback)
 {
     if (!context || !callback)
     {
@@ -191,21 +204,20 @@ void ProfileHost::detachBusWatch()
     }
 }
 std::vector<ProfileInfo> ProfileHost::profiles() const
-{ 
-    std::vector<ProfileInfo> profileInfos {};
-    for (const auto& profileInfo: m_profileBins)
+{
+    std::vector<ProfileInfo> profileInfos{};
+    for (const auto &profileInfo : m_profileBins)
     {
-       profileInfos.push_back(profileInfo->profile());
+        profileInfos.push_back(profileInfo->profile());
     }
     return profileInfos;
 }
 GstAppSink *ProfileHost::appSinkForProfile(const std::string &name) const
 {
-    GstAppSink *appSink {nullptr};
-    auto it = std::find_if(m_profileBins.begin(), m_profileBins.end(), [&](const std::unique_ptr<ProfileBin> &profileBin)
-    {
-        return profileBin->profile().name == name; 
-    });
+    GstAppSink *appSink{nullptr};
+    auto it =
+        std::find_if(m_profileBins.begin(), m_profileBins.end(),
+                     [&](const std::unique_ptr<ProfileBin> &profileBin) { return profileBin->profile().name == name; });
     if (it != m_profileBins.end())
     {
         appSink = GST_APP_SINK(it->get()->appSink());
@@ -235,7 +247,7 @@ void ProfileHost::cleanup()
     m_isLinked = false;
 }
 gboolean ProfileHost::onBusMessageStatic(gpointer userData)
-{ 
+{
     auto self = static_cast<ProfileHost *>(userData);
     if (!self->m_busSource)
     {
@@ -260,23 +272,20 @@ void ProfileHost::handleBusMessage(GstMessage *msg)
     }
     switch (GST_MESSAGE_TYPE(msg))
     {
-        case GST_MESSAGE_ERROR:
-        {
-            m_appCallback(PipelineEvent::Error, parseMessage(msg, &gst_message_parse_error));
-            break;
-        }
-        case GST_MESSAGE_WARNING:
-        {
-            m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_warning));
-            break;
-        }
-        case GST_MESSAGE_EOS:
-        {
-            m_appCallback(PipelineEvent::EndOfStream, "End of Stream");
-            break;
-        }
-        default:
-            break;
+    case GST_MESSAGE_ERROR: {
+        m_appCallback(PipelineEvent::Error, parseMessage(msg, &gst_message_parse_error));
+        break;
+    }
+    case GST_MESSAGE_WARNING: {
+        m_appCallback(PipelineEvent::Warning, parseMessage(msg, &gst_message_parse_warning));
+        break;
+    }
+    case GST_MESSAGE_EOS: {
+        m_appCallback(PipelineEvent::EndOfStream, "End of Stream");
+        break;
+    }
+    default:
+        break;
     }
 }
 std::string ProfileHost::parseMessage(GstMessage *msg, MessageParse parser)
