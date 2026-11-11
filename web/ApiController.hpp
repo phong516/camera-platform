@@ -1,9 +1,5 @@
 #pragma once
 
-#include <string>
-
-#include "model/Profile.hpp"
-#include "model/SystemStatus.hpp"
 #include "web/CameraControl.hpp"
 #include "web/WebServer.hpp"
 
