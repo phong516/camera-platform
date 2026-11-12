@@ -10,6 +10,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+WebServer::~WebServer()
+{
+}
+
 bool WebServer::start(std::uint16_t port)
 {
     m_port = port;
@@ -95,7 +99,7 @@ void WebServer::run()
             }
             if (n < 0)
             {
-                if (n == EINTR)
+                if (errno == EINTR)
                 {
                     continue;
                 }
@@ -110,12 +114,32 @@ void WebServer::run()
             }
             else
             {
-				resp = HttpResponse::json(raw, 400);
+                resp = HttpResponse::json(jsonError("bad request"), 400);
             }
 
-			std::string out {serializeResponse(resp)}; 
-			send(fd, out.c_str(), sizeof(out), 0);
-			close(fd);
+            std::string out{serializeResponse(resp)};
+
+            // send all
+            std::size_t sent{0};
+            while (sent < out.size())
+            {
+                ssize_t size = send(fd, out.c_str(), out.size() - sent, 0);
+            }
+            ssize_t s = send(fd, out.c_str(), sizeof(out), 0);
+            if (s < 0)
+            {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+                break;
+            }
+            if (s == 0)
+            {
+                break;
+            }
+            sent += static_cast<size_t>(s);
         }
+        close(fd);
     }
 }
