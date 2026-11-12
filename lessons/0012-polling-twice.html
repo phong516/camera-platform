@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 12 — Polling, Twice: Clients Ask, the Server Asks the Kernel</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<script defer src="../assets/quiz.js"></script>
+</head>
+<body>
+
+<p class="kicker">camera-platform · C sockets · Lesson 0012</p>
+<h1>Polling, Twice</h1>
+<p class="subtitle">A polling client asks the server again. A polling server asks the kernel which sockets are ready. Same word, different jobs — and only the second one is about <code>poll(2)</code>.</p>
+
+<div class="mission-strip">
+<strong>Mission tie-in:</strong> the Qt client refreshes the control plane every 500 ms (<code>CameraBackend</code>), and <code>WebServer</code> is the process that answers those refreshes. This lesson builds the smallest C server that can answer many polling clients from one thread, then maps it onto the <code>WebServer</code> contract already in the repo.
+</div>
+
+<h2>Two different polls</h2>
+
+<table>
+<tr><th>Polling style</th><th>Who initiates</th><th>What it costs</th></tr>
+<tr><td><strong>Client polling</strong></td><td>The UI asks <code>GET /api/status</code> every 500 ms.</td><td>Simple, stateless, easy to retry. The server sees a fresh connection each time.</td></tr>
+<tr><td><strong>Server <code>poll(2)</code></strong></td><td>The server asks the kernel which file descriptors are readable.</td><td>One thread can wait on the listen socket and every client socket at once. No thread per connection.</td></tr>
+</table>
+
+<p>The two compose naturally: many clients poll the server, and the server uses <code>poll()</code> to serve all of them without blocking on the slowest one.</p>
+
+<h2>Why blocking <code>accept()</code> is not enough</h2>
+
+<p>The current <code>WebServer</code> contract is deliberately serial: accept one connection, read one request, reply, close. That is enough for one client at a time and easy to reason about. It stops being enough when a client connects and then sends nothing — a blocking <code>read()</code> parks the only worker until the receive timeout expires.</p>
+
+<pre class="diagram"><code>blocking loop                       poll() loop
+accept() ── one client              poll() ── many fds
+read()   ── wait for that client    ready? ── service only those
+write()  ── reply                   repeat
+close()  ── next client             slow client costs one slot</code></pre>
+
+<p><code>poll()</code> does not read for you. It only tells you which descriptors are <em>ready now</em>. The loop still owns the read, the buffer, the parse, and the close.</p>
+
+<h2>Run the lab</h2>
+
+<pre><code>gcc -std=c11 -Wall -Wextra -Wpedantic -g -O0 \
+    labs/lab-poll-server.c -o ~/cam-recon/pollserver
+
+~/cam-recon/pollserver 18080</code></pre>
+
+<p>In another terminal:</p>
+
+<pre><code>$ curl -sS -i http://127.0.0.1:18080/api/status
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 64
+Connection: close
+
+{"status":"ok","requests":1,"uptimeSeconds":3,"activeClients":1}
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/nope
+404
+$ curl -sS -X POST -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/api/status
+405</code></pre>
+
+<p>The lab implements one request per connection and closes it, matching the repo's HTTP contract. The interesting part is what happens while a connection is open but not finished.</p>
+
+<h2>What the measurements show</h2>
+
+<h3>1. A silent client does not stall the others</h3>
+
+<pre><code># hold one connection open for 2 s without sending a byte
+( exec 3&lt;&gt;/dev/tcp/127.0.0.1/18080; sleep 2 ) &amp;
+
+# meanwhile, five normal requests
+for i in 1 2 3 4 5; do
+  curl -sS -o /dev/null -w '%{time_total}\n' \
+    http://127.0.0.1:18080/api/status
+done</code></pre>
+
+<pre><code>0.000363
+0.000360
+0.000402
+0.000632
+0.000369</code></pre>
+
+<p>Sub-millisecond responses while another socket sits idle. The status body also reported <code>"activeClients":2</code>: the idle client occupies a slot, not the server.</p>
+
+<h3>2. 500 requests, 50 at a time, one thread</h3>
+
+<pre><code>seq 1 500 | xargs -P 50 -I{} curl -sS -o /dev/null \
+  -w '%{http_code}\n' http://127.0.0.1:18080/api/status \
+  | sort | uniq -c</code></pre>
+
+<pre><code>    500 200
+500 requests, 50 parallel: 1247 ms</code></pre>
+
+<p>All 500 succeeded. The 1247 ms includes starting 500 <code>curl</code> processes — this is a correctness probe, not a throughput benchmark. The server's single thread stayed inside <code>poll()</code> and serviced whichever sockets were ready.</p>
+
+<h3>3. A request can arrive in pieces</h3>
+
+<pre><code>( printf 'GET /api/status HT'; sleep 1; \
+  printf 'TP/1.1\r\nHost: x\r\n\r\n'; sleep 0.2 ) \
+  | nc 127.0.0.1 18080 | tail -1</code></pre>
+
+<pre><code>{"status":"ok","requests":509,"uptimeSeconds":15,"activeClients":1}</code></pre>
+
+<p>The first <code>recv()</code> returned only <code>GET /api/status HT</code>. The lab kept the partial bytes in that client's buffer, went back to <code>poll()</code>, and finished the request when the rest arrived one second later.</p>
+
+<h3>4. Shutdown is a flag, not a thread cancel</h3>
+
+<pre><code>[serve] stopped: 509 requests</code></pre>
+
+<p><kbd>Ctrl-C</kbd> sets <code>g_stop</code>; <code>poll()</code> returns on the signal, the loop exits, then the listen socket and every client are closed. The 1 s timeout is also the place to put periodic housekeeping later.</p>
+
+<h2>The loop in seven steps</h2>
+
+<table>
+<tr><th>Step</th><th>Code</th><th>Why</th></tr>
+<tr><td>1. Build the fd set</td><td><code>pfds[0] = listen_fd</code>; append every live client</td><td>One array is the whole wait set.</td></tr>
+<tr><td>2. Wait</td><td><code>poll(pfds, nfds, 1000)</code></td><td>Sleeps until data, a new connection, a signal, or the timeout.</td></tr>
+<tr><td>3. Drain accepts</td><td><code>accept()</code> until <code>EAGAIN</code></td><td>The listen fd is non-blocking; one wakeup may mean several pending connections.</td></tr>
+<tr><td>4. Service ready clients</td><td><code>recv()</code> only on <code>POLLIN</code></td><td>Readiness comes from the kernel, not a guess.</td></tr>
+<tr><td>5. Buffer the bytes</td><td>append to <code>client.buf</code></td><td>One <code>recv()</code> is not one request.</td></tr>
+<tr><td>6. Parse and reply</td><td>find <code>\r\n\r\n</code>, then <code>200/404/405</code></td><td>Same job <code>parseRequest()</code> and <code>dispatch()</code> do in <code>WebServer</code>.</td></tr>
+<tr><td>7. Close</td><td><code>close(fd)</code>, free the slot</td><td>One request per connection is the contract; no keep-alive state to track.</td></tr>
+</table>
+
+<h2>Traps this lab keeps visible</h2>
+
+<div class="box rule">
+<span class="box-title">Readiness is not completeness</span>
+<p><code>POLLIN</code> means "at least one byte is available", not "the whole request arrived". The buffer and the <code>\r\n\r\n</code> search are mandatory.</p>
+</div>
+
+<div class="box rule">
+<span class="box-title">A non-blocking listen fd, but not a magic non-blocking server</span>
+<p>The lab sets only the listen socket to <code>O_NONBLOCK</code> so the accept drain can stop at <code>EAGAIN</code>. Accepted sockets stay blocking because the response is tiny and <code>poll()</code> already told us a read will not block. A production server that can write large bodies must handle partial writes too.</p>
+</div>
+
+<div class="box rule">
+<span class="box-title">A slow client costs a slot</span>
+<p><code>MAX_CLIENTS</code> is 64. Measured: 64 connections held open, then the 65th request returned <code>503</code> and logged <code>[busy] ... rejected</code>. That is a deliberate bound, not an accident. Without it, the array is the new unbounded resource.</p>
+</div>
+
+<div class="box rule">
+<span class="box-title">One thread is still one thread</span>
+<p><code>poll()</code> removes waiting, not work. A handler that blocks on disk, GStreamer, or a mutex stalls every client. The control plane should hand long jobs to the application and return a state snapshot, not perform the job inside the HTTP handler.</p>
+</div>
+
+<h2>Your repo step</h2>
+
+<p>Implement <code>WebServer::run()</code> to the contract already written in <code>web/WebServer.hpp</code>: blocking <code>accept()</code>, one request per connection, 8 KiB cap, 5 s <code>SO_RCVTIMEO</code>, <code>parseRequest()</code>, <code>dispatch()</code>, <code>serializeResponse()</code>. That is the serial version — and it is the right first version.</p>
+
+<p>Then test it with two overlapping clients:</p>
+
+<pre><code># terminal 1: a client that connects and sends nothing for 6 s
+( exec 3&lt;&gt;/dev/tcp/127.0.0.1/8080; sleep 6 ) &amp;
+
+# terminal 2: a normal request; time it
+curl -sS -o /dev/null -w '%{time_total}\n' \
+  http://127.0.0.1:8080/api/status</code></pre>
+
+<p>With the serial contract, the second request waits for the first connection's 5 s receive timeout. That is the measured cost of the simple design. If the control plane needs to tolerate that, replace the accept/read body with this lab's <code>poll()</code> loop; the parser, dispatcher, and serializer do not change.</p>
+
+<h2>Retrieval check</h2>
+
+<div class="quiz">
+  <div class="quiz-q" data-answer="2">
+    <p class="quiz-prompt">What does <code>poll()</code> guarantee when it returns?</p>
+    <button class="quiz-opt">The listed sockets have finished their requests.</button>
+    <button class="quiz-opt">The listed sockets have complete HTTP messages.</button>
+    <button class="quiz-opt">The listed sockets are ready for the requested operation.</button>
+    <p class="quiz-explain" data-explain><code>poll()</code> reports readiness. The request may still be partial; the caller reads and buffers.</p>
+  </div>
+  <div class="quiz-q" data-answer="0">
+    <p class="quiz-prompt">Why does the lab keep a per-client buffer?</p>
+    <button class="quiz-opt">One <code>recv()</code> can return only part of a request.</button>
+    <button class="quiz-opt">One <code>recv()</code> can return several complete requests.</button>
+    <button class="quiz-opt">One <code>recv()</code> always returns the whole request.</button>
+    <p class="quiz-explain" data-explain>TCP is a byte stream, not a message stream. The <code>\r\n\r\n</code> search finds the boundary; the buffer preserves what has arrived so far.</p>
+  </div>
+</div>
+
+<p class="ask-teacher">Ask me about any unclear part, or bring back the two-client timing from your <code>WebServer</code> and we can decide whether the serial loop is enough.</p>
+
+<p class="footer-nav"><a href="0011-rtsp-frames-into-qml.html">← Lesson 0011</a><a href="../docs/ARCHITECTURE-SERVER-CLIENT.md">Server/client architecture →</a></p>
+
+</body>
+</html>

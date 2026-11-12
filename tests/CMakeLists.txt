@@ -11,6 +11,7 @@ function(add_camera_test target test_name source library)
 endfunction()
 
 add_camera_test(test_http web.http web/test_http.cpp web_lib)
+add_camera_test(test_webserver web.webserver web/test_webserver.cpp web_lib)
 add_camera_test(test_videopipeline video.videopipeline video/test_videopipeline.cpp video_lib)
 add_camera_test(test_profilehost server.profilehost server/test_profilehost.cpp camera_server_lib)
 add_camera_test(test_rtspprofileserver server.rtspprofileserver server/test_rtspprofileserver.cpp camera_server_lib)

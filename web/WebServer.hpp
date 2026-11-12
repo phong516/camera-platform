@@ -10,6 +10,9 @@
 #include "common/Protocol.hpp" // proto::kControlPort - default listen port
 #include "web/HttpMessage.hpp"
 
+#define BUFFER_SIZE 8192
+#define CONNECTION_TIMEOUT_SECOND 5
+
 using HttpHandler = std::function<HttpResponse(const HttpRequest &)>;
 
 /// Minimal single-threaded HTTP/1.1 server built directly on POSIX sockets.
