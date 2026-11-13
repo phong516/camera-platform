@@ -31,7 +31,7 @@ using HttpHandler = std::function<HttpResponse(const HttpRequest &)>;
 ///   - ~WebServer() calls stop(); stop() on a never-started server is a no-op
 class WebServer
 {
-public:
+  public:
     WebServer() = default;
     ~WebServer();
 
@@ -50,12 +50,12 @@ public:
     /// Look up the handler for a parsed request; synthesizes 404/405 replies.
     HttpResponse dispatch(const HttpRequest &request) const;
 
-private:
+  private:
     int m_listenFd{-1};
     std::uint16_t m_port{0};
     std::atomic<bool> m_running{false};
     std::thread m_thread;
-    std::unordered_map<std::string, HttpHandler> m_routes;
+    std::unordered_map<std::string, std::unordered_map<std::string, HttpHandler>> m_routes;
 
     void run();
 
