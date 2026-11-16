@@ -35,7 +35,7 @@
 ///     does. Call registerRoutes() before WebServer::start().
 class ApiController
 {
-public:
+  public:
     explicit ApiController(CameraControl &control);
 
     /// Registers every route above on the server. Call once, before start().
@@ -49,10 +49,12 @@ public:
     HttpResponse getHealth(const HttpRequest &request);
     HttpResponse getStatus(const HttpRequest &request);
     HttpResponse getProfiles(const HttpRequest &request);
-    HttpResponse getProfile(const HttpRequest &request);  ///< GET /api/profiles/{name}
-    HttpResponse onProfile(const HttpRequest &request);   ///< POST /api/profiles/{name}/on
-    HttpResponse offProfile(const HttpRequest &request);  ///< POST /api/profiles/{name}/off
+    HttpResponse getProfile(const HttpRequest &request); ///< GET /api/profiles/{name}
+    HttpResponse onProfile(const HttpRequest &request);  ///< POST /api/profiles/{name}/on
+    HttpResponse offProfile(const HttpRequest &request); ///< POST /api/profiles/{name}/off
 
-private:
+  private:
     CameraControl &m_control;
+
+    std::string profileNameFromPath(const std::string &path);
 };

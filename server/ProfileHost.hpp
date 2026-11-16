@@ -3,7 +3,6 @@
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
