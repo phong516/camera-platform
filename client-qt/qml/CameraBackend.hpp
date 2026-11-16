@@ -17,9 +17,9 @@
 //   renders the RTSP URL from the selected profile.
 
 #include <QObject>
+#include <QNetworkAccessManager>
 #include <QString>
 #include <QVariantList>
-#include <QVariantMap>
 
 class CameraBackend : public QObject
 {
@@ -68,8 +68,9 @@ signals:
     void errorOccurred();
 
 private:
-    QVariantMap m_current;
+    QNetworkAccessManager m_network;
     QVariantList m_profiles;
+    QString m_selectedProfile;
     QString m_lastError;
     bool m_streaming{false};
 };
