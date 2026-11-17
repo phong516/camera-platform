@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "web/CameraControl.hpp"
 #include "web/WebServer.hpp"
 
@@ -25,7 +28,8 @@
 ///   - getProfile/onProfile/offProfile take the name from the request path
 ///     (path parsing is internal); each answers 200 with toJson(profile) -
 ///     for the actions, the state AFTER the change - or 404 jsonError when
-///     the name is not in the catalog.
+///     the name is not in the catalog or the path is not that exact route
+///     shape (e.g. /api/profiles/hd/extra, /api/profiles/).
 ///   - on/off are idempotent (Protocol.hpp): setProfileEnabled returning true
 ///     for an already-changed profile is still 200.
 ///   - Route registration happens inside registerRoutes(); WebServer routes on
@@ -56,5 +60,8 @@ class ApiController
   private:
     CameraControl &m_control;
 
-    std::string profileNameFromPath(const std::string &path);
+    /// 200 + toJson(profile) for a catalog name, 404 jsonError otherwise.
+    /// The single place a profile-scoped handler builds its body, so
+    /// getProfile/onProfile/offProfile cannot disagree on the shape.
+    HttpResponse profileResponse(std::string_view name) const;
 };

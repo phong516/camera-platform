@@ -9,6 +9,20 @@ Notes for AI agents working in this repository. Read this before editing code.
 - The learner (Phong) writes the project code himself. The agent's role here is
   teaching and review, not implementing `server/`, `web/`, or `video/` unless he
   explicitly asks. See `NOTES.md` (learner preferences) and `MISSION.md`.
+
+## Scope of an edit
+
+The file he names is the only file to change. "Update the header" means
+`web/X.hpp` and nothing else.
+
+- No drive-by edits: no fixing the build, no adjacent bugs, no renames, no
+  "while I was there" cleanups. Report them instead, in one line, as a separate
+  offer.
+- An edit that leaves the tree uncompilable is an acceptable outcome. Say which
+  symbol is now undefined and stop.
+- Implementation, tests, and docs are each their own request. A review comment
+  is not permission to apply it.
+- When unsure whether a file is in scope, do nothing to it and ask.
 - Teaching material is a first-class part of the repo and is tracked in git:
   `lessons/*.html`, `labs/*.cpp`, `reference/*.html`, `learning-records/*.md`,
   `assets/lesson.css`, `assets/quiz.js`.
