@@ -53,11 +53,14 @@ ctest --test-dir build --output-on-failure
 ```
 
 - CI (`.github/workflows/ci.yml`) uses Ubuntu 26.04, Ninja, `RelWithDebInfo`,
-  `-DCAMERA_PLATFORM_WITH_QT=OFF`, and the same build/test commands.
-- CI installs `libgstreamer1.0-dev`, `libgstreamer-plugins-base1.0-dev`,
-  `libgstrtspserver-1.0-dev`, `gstreamer1.0-plugins-base`, and
-  `gstreamer1.0-plugins-ugly`. The last one is required: `ProfileBin` creates
-  `x264enc` at runtime and every profile branch fails if it is missing.
+  `-DCAMERA_PLATFORM_WITH_QT=ON`, and the same build/test commands. The Qt
+  client is compiled in CI, so a `client-qt/` break fails the job.
+- CI installs the Qt 6.10.2 dev packages plus `libgstreamer1.0-dev`,
+  `libgstreamer-plugins-base1.0-dev`, `libgstrtspserver-1.0-dev`, and the
+  base/good/bad/ugly plugin sets. `gstreamer1.0-plugins-ugly` is required:
+  `ProfileBin` creates `x264enc` at runtime and every profile branch fails if
+  it is missing. `plugins-good` supplies `rtph264pay` and `plugins-bad`
+  supplies `h264parse` for the RTSP media launch strings.
 - Local toolchain: C++23 (`CMAKE_CXX_STANDARD 23`), g++ / CMake, GStreamer
   1.28.2 on WSL2. `CMAKE_EXPORT_COMPILE_COMMANDS ON` keeps
   `build/compile_commands.json` current for clangd/cpptools.

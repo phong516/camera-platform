@@ -27,14 +27,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The server needs GStreamer core + plugins-base + gst-rtsp-server.
-      # libgstrtspserver-1.0-dev is a separate source package from
-      # plugins-bad and provides gstreamer-rtsp-server-1.0.pc.
+      # The server needs GStreamer core plus these runtime plugins:
+      #   base - videotestsrc / videoconvert / appsink
+      #   good - rtph264pay (the RTSP media launch strings)
+      #   bad  - h264parse
+      #   ugly - x264enc, which ProfileBin.cpp instantiates at runtime
+      # libgstrtspserver-1.0-dev provides gstreamer-rtsp-server-1.0.pc (a
+      # separate source package from plugins-bad). It pulls good/bad in
+      # transitively today; they are listed explicitly so a dependency change
+      # cannot silently drop the RTSP branch.
       #
-      # plugins-ugly provides x264enc, which ProfileBin.cpp instantiates at
-      # runtime (profile-bin: capsfilter -> x264enc -> appsink). Without it the
-      # factory make fails and every pipeline falls over.
-      - name: Install GStreamer dependencies
+      # Qt 6.10.2 is what client-qt/ requires (CMakeLists.txt). Ubuntu 26.04
+      # ships exactly that version.
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -43,29 +48,28 @@ jobs:
             libgstreamer-plugins-base1.0-dev \
             libgstrtspserver-1.0-dev \
             gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-ugly
-
-      # Fail the job before building if the encoder the server depends on is
-      # missing from the plugin set.
-      - name: Check x264enc is present
-        run: |
-          gst-inspect-1.0 x264enc | head -5
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-multimedia-dev
 
       - name: Show tool versions
         run: |
           cmake --version | head -1
           g++ --version | head -1
+          qmake6 -query QT_VERSION
           pkg-config --modversion gstreamer-1.0 gstreamer-rtsp-server-1.0
 
-      # CAMERA_PLATFORM_WITH_QT=OFF builds the headless server and the tests.
-      # Ubuntu 26.04 does ship Qt 6.10.2 (qt6-base-dev + qt6-declarative-dev),
-      # so building client-qt/ is possible later: install those two packages and
-      # switch this to ON.
+      # Build the headless server, the tests and the Qt/QML client.
+      # WITH_QT=ON turns a missing or older Qt into a configure failure instead
+      # of silently skipping client-qt/ the way AUTO would.
       - name: Configure
         run: |
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
-            -DCAMERA_PLATFORM_WITH_QT=OFF \
+            -DCAMERA_PLATFORM_WITH_QT=ON \
             -DCAMERA_PLATFORM_BUILD_TESTS=ON
 
       - name: Build
