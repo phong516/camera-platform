@@ -19,3 +19,12 @@ add_camera_test(test_profilebin server.profilebin server/test_profilebin.cpp cam
 add_camera_test(test_application server.application server/test_application.cpp camera_server_lib)
 
 add_camera_test(test_apicontroller web.apicontroller web/test_apicontroller.cpp web_lib)
+
+# Qt client. Only registered when Qt was found; camera_platform_qml carries
+# CameraBackend.cpp and its moc output, so the test sees the same code the app
+# links. Qt6::Network is needed for QNetworkAccessManager in the public header.
+if(CAMERA_PLATFORM_QT_ENABLED)
+    add_camera_test(test_camerabackend client.camerabackend
+                    client-qt/test_camerabackend.cpp camera_platform_qml)
+    target_link_libraries(test_camerabackend PRIVATE Qt6::Network)
+endif()

@@ -52,7 +52,15 @@ int CameraBackend::fps() const
 }
 bool CameraBackend::streaming() const
 {
-    return m_streaming;
+    for (const auto &item : m_profiles)
+    {
+        const QVariantMap &profile = item.toMap();
+        if (profile["name"].toString() == m_selectedProfile)
+        {
+            return profile["state"].toString() == proto::kStateLive;
+        }
+    }
+    return false;
 }
 
 double CameraBackend::bitrateKbps() const
@@ -113,4 +121,17 @@ void CameraBackend::refresh()
         }
 		reply->deleteLater();
     });
+}
+void CameraBackend::play(const QString &profile)
+{
+    m_streaming = true;
+    m_selectedProfile = profile;
+}
+void CameraBackend::stop()
+{
+    m_streaming = false;
+}
+QVariantList CameraBackend::profiles() const
+{
+    return m_profiles;
 }
