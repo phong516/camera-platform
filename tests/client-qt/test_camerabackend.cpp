@@ -41,15 +41,14 @@ int main(int argc, char *argv[])
     CHECK(backend.profiles().isEmpty());
 
     // --- the real GET /api/profiles wire shape ------------------------------
-    const QByteArray twoProfiles = snapshot(
-        "{\"name\":\"hd\",\"width\":1920,\"height\":1080,\"fps\":30,"
-        "\"bitrateKbps\":4000,\"state\":\"ready\","
-        "\"url\":\"rtsp://127.0.0.1:8554/hd\",\"viewers\":0,"
-        "\"cpuPercent\":12.5,\"lastError\":\"\"},"
-        "{\"name\":\"low\",\"width\":854,\"height\":480,\"fps\":15,"
-        "\"bitrateKbps\":800,\"state\":\"live\","
-        "\"url\":\"rtsp://127.0.0.1:8554/low\",\"viewers\":1,"
-        "\"cpuPercent\":3.25,\"lastError\":\"\"}");
+    const QByteArray twoProfiles = snapshot("{\"name\":\"hd\",\"width\":1920,\"height\":1080,\"fps\":30,"
+                                            "\"bitrateKbps\":4000,\"state\":\"ready\","
+                                            "\"url\":\"rtsp://127.0.0.1:8554/hd\",\"viewers\":0,"
+                                            "\"cpuPercent\":12.5,\"lastError\":\"\"},"
+                                            "{\"name\":\"low\",\"width\":854,\"height\":480,\"fps\":15,"
+                                            "\"bitrateKbps\":800,\"state\":\"live\","
+                                            "\"url\":\"rtsp://127.0.0.1:8554/low\",\"viewers\":1,"
+                                            "\"cpuPercent\":3.25,\"lastError\":\"\"}");
 
     CHECK(backend.applySnapshot(twoProfiles));
     CHECK(backend.lastError().isEmpty());
@@ -85,8 +84,7 @@ int main(int argc, char *argv[])
     // QSignalSpy would drag in Qt6::Test; a plain counter is enough to prove
     // that a rejected payload reaches QML as errorOccurred.
     int errors = 0;
-    QObject::connect(&backend, &CameraBackend::errorOccurred, &backend,
-                     [&errors]() { ++errors; });
+    QObject::connect(&backend, &CameraBackend::errorOccurred, &backend, [&errors]() { ++errors; });
 
     CHECK(!backend.applySnapshot(QByteArray("not json")));
     CHECK(!backend.lastError().isEmpty());
@@ -103,11 +101,10 @@ int main(int argc, char *argv[])
     CHECK(backend.profiles()[0].toMap()["name"].toString() == QStringLiteral("hd"));
 
     // --- a new snapshot replaces the catalog, it does not append ------------
-    CHECK(backend.applySnapshot(
-        snapshot("{\"name\":\"thumb\",\"width\":320,\"height\":180,\"fps\":5,"
-                 "\"bitrateKbps\":100,\"state\":\"off\","
-                 "\"url\":\"rtsp://127.0.0.1:8554/thumb\",\"viewers\":0,"
-                 "\"cpuPercent\":0.5,\"lastError\":\"\"}")));
+    CHECK(backend.applySnapshot(snapshot("{\"name\":\"thumb\",\"width\":320,\"height\":180,\"fps\":5,"
+                                         "\"bitrateKbps\":100,\"state\":\"off\","
+                                         "\"url\":\"rtsp://127.0.0.1:8554/thumb\",\"viewers\":0,"
+                                         "\"cpuPercent\":0.5,\"lastError\":\"\"}")));
     CHECK_EQ(backend.profiles().size(), 1);
     CHECK(backend.profiles()[0].toMap()["name"].toString() == QStringLiteral("thumb"));
 

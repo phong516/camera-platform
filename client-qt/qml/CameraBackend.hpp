@@ -16,8 +16,9 @@
 // Phase 4: refresh() polls the control API; play()/stop() call it; StreamPlayer
 //   renders the RTSP URL from the selected profile.
 
-#include <QObject>
+#include <QByteArray>
 #include <QNetworkAccessManager>
+#include <QObject>
 #include <QString>
 #include <QVariantList>
 
@@ -35,7 +36,7 @@ class CameraBackend : public QObject
 
     Q_PROPERTY(QString lastError READ lastError NOTIFY errorOccurred)
 
-public:
+  public:
     explicit CameraBackend(QObject *parent = nullptr);
     ~CameraBackend() override;
 
@@ -58,20 +59,19 @@ public:
     /// whose values actually changed. Push-only - QML never polls.
     void refresh();
 
-    Q_INVOKABLE void play(const QString &profile = QString());
+    Q_INVOKABLE void play(const QString &profileName = QString());
     Q_INVOKABLE void stop();
     Q_INVOKABLE QVariantList profiles() const;
 
-signals:
+  signals:
     void cameraChanged();
     void statsChanged();
     void errorOccurred();
 
-private:
+  private:
     QNetworkAccessManager m_network;
     QVariantList m_profiles;
     QString m_selectedProfile;
     QString m_lastError;
     bool m_streaming{false};
 };
-
