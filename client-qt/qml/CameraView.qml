@@ -45,7 +45,7 @@ Item {
         anchors.fill: parent
         fillMode: VideoOutput.PreserveAspectFit
     }
-
-    Component.onCompleted: player.play()
-    Component.onDestruction: player.stop()
+    
+//    Component.onCompleted: player.play()
+//   Component.onDestruction: player.stop()
 }

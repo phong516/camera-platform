@@ -7,14 +7,8 @@ ApplicationWindow {
     id: root
     title: "Camera Platform"
     visible: true
-    // width: Screen.width
-    // height: Screen.height
     visibility: Window.Maximized
-    flags: Qt.Window | 
-            Qt.WindowTitleHint |
-            Qt.WindowSystemMenuHint |
-            Qt.WindowCloseButtonHint |
-            Qt.WindowMinimizeButtonHint
+    flags: Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint
     ColumnLayout {
         id: columnLayout
         anchors.fill: parent
@@ -28,5 +22,12 @@ ApplicationWindow {
         Settings {
             Layout.fillWidth: true
         }
+    }
+    Timer {
+        id: timer
+        interval: 5000
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: backend.refresh()
     }
 }
