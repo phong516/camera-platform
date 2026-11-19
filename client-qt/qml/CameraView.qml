@@ -28,14 +28,16 @@
 // ===========================================================================
 
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
 import QtMultimedia
 
 Item {
+    id: root
+    property var profile: []
+    property bool play: false
+    property bool stop: false
     MediaPlayer {
         id: player
-        source: "rtsp://127.0.0.1:8554/hd"
+        source: root.profile ? root.profile.url : ""
         videoOutput: output
         onErrorOccurred: (error, errorString) => console.error(errorString)
     }
@@ -45,7 +47,18 @@ Item {
         anchors.fill: parent
         fillMode: VideoOutput.PreserveAspectFit
     }
-    
-//    Component.onCompleted: player.play()
-//   Component.onDestruction: player.stop()
+    onPlayChanged: {
+        if (play)
+        {
+            stop: false
+            player.play()
+        }
+    } 
+    onStopChanged: {
+        if (stop)
+        {
+            play: true
+            player.stop()
+        }
+    }
 }

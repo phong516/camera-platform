@@ -7,10 +7,6 @@
 // the client talks to the server over HTTP for control and RTSP for video, so it
 // never links the server and never links GStreamer.
 //
-// Registered in client-qt/main.cpp:
-//     CameraBackend backend;
-//     engine.rootContext()->setContextProperty("backend", &backend);
-//
 // Phase 1 (now): reads a local JSON snapshot and reports it. Wire a real
 //   ServerClient (HTTP GET /api/profiles) into refresh() in Phase 4.
 // Phase 4: refresh() polls the control API; play()/stop() call it; StreamPlayer
@@ -20,19 +16,25 @@
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 #include <QVariantList>
+#include <QtQmlIntegration/qqmlintegration.h>
+#include <QMutex>
+#include <qmutex.h>
 
 class CameraBackend : public QObject
 {
     Q_OBJECT
+    QML_ELEMENT
 
-    Q_PROPERTY(QString statusText READ statusText NOTIFY cameraChanged)
-    Q_PROPERTY(QString resolution READ resolution NOTIFY cameraChanged)
-    Q_PROPERTY(int fps READ fps NOTIFY cameraChanged)
+    Q_PROPERTY(QVariantList profiles READ profiles NOTIFY profilesChanged)
+    Q_PROPERTY(QString statusText READ statusText NOTIFY profilesChanged)
+    Q_PROPERTY(QString resolution READ resolution NOTIFY profilesChanged)
+    Q_PROPERTY(int fps READ fps NOTIFY profilesChanged)
     Q_PROPERTY(bool streaming READ streaming NOTIFY cameraChanged)
 
-    Q_PROPERTY(double bitrateKbps READ bitrateKbps NOTIFY statsChanged)
-    Q_PROPERTY(double cpuPercent READ cpuPercent NOTIFY statsChanged)
+    Q_PROPERTY(double bitrateKbps READ bitrateKbps NOTIFY profilesChanged)
+    Q_PROPERTY(double cpuPercent READ cpuPercent NOTIFY profilesChanged)
 
     Q_PROPERTY(QString lastError READ lastError NOTIFY errorOccurred)
 
@@ -50,6 +52,8 @@ class CameraBackend : public QObject
 
     QString lastError() const;
 
+    QVariantList profiles() const;
+
     /// Applies a JSON snapshot of the control API's /api/profiles response.
     /// Returns false and records lastError() when the payload is unusable.
     /// Serve as the single entry point for both the Phase 4 HTTP client and tests.
@@ -61,17 +65,18 @@ class CameraBackend : public QObject
 
     Q_INVOKABLE void play(const QString &profileName = QString());
     Q_INVOKABLE void stop();
-    Q_INVOKABLE QVariantList profiles() const;
 
   signals:
     void cameraChanged();
-    void statsChanged();
+    void profilesChanged();
     void errorOccurred();
 
   private:
     QNetworkAccessManager m_network;
+    QTimer m_timer;
     QVariantList m_profiles;
     QString m_selectedProfile;
     QString m_lastError;
     bool m_streaming{false};
+    mutable QMutex m_mutex;
 };

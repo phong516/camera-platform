@@ -21,6 +21,7 @@ qt_add_qml_module(camera_platform_qml
         StatusBar.qml
         Settings.qml
     SOURCES
+        CameraBackend.hpp
         CameraBackend.cpp
 )
 

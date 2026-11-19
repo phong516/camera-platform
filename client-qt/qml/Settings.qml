@@ -3,46 +3,59 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 Rectangle {
-   id: root
-   color: "lightgray"
-   implicitHeight: content.implicitHeight
-   ColumnLayout {
-    id: content
-    anchors.fill: parent
-    spacing: 10
-    GridLayout {
-        columns: 2
-        columnSpacing: 5
-        rowSpacing: 5
-        Label {
-            text: "Source"
+    id: root
+    color: "lightgray"
+    implicitHeight: content.implicitHeight
+    property var profiles: []
+    property string resolution: ""
+    property int fps: 0
+    readonly property var selectedProfile: profiles.find(profile => profile.name == profilesList.currentText)
+    property bool start: false
+    property bool stop: false
+    ColumnLayout {
+        id: content
+        anchors.fill: parent
+        spacing: 10
+        GridLayout {
+            columns: 2
+            columnSpacing: 5
+            rowSpacing: 5
+            Label {
+                text: "Source"
+            }
+            ComboBox {
+                id: profilesList
+                model: root.profiles.map(profile => profile.name)
+                currentIndex: 0
+            }
+            Label {
+                text: "Resolution"
+            }
+            Label {
+                text: root.selectedProfile ? root.selectedProfile.width + "x" + root.selectedProfile.height : ""
+            }
+            Label {
+                text: "FPS"
+            }
+            Label {
+                text: root.selectedProfile ? root.selectedProfile.fps : ""
+            }
         }
-        ComboBox {
-            model: ["videotestsrc", "/dev/video0"]
-            currentIndex: 0
-        }
-        Label {
-            text: "Resolution"
-        }
-        ComboBox {
-            model: ["140p", "240p", "360p", "720p", "1040p"]
-            currentIndex: 0
-        }
-        Label {
-            text: "FPS"
-        }
-        ComboBox {
-            model: ["30", "60"]
-            currentIndex: 0
+        RowLayout {
+            Button {
+                text: "Start"
+                onClicked: {
+                    root.start = true
+                    root.stop = false
+                }
+            }
+            Button {
+                text: "Stop"
+                onClicked: {
+                    root.stop = true
+                    root.start = false
+                }
+            }
         }
     }
-    RowLayout {
-        Button {
-            text: "Start"
-        }
-        Button {
-            text: "Stop"
-        }
-    }
-   } 
 }

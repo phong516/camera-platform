@@ -13,21 +13,37 @@ ApplicationWindow {
         id: columnLayout
         anchors.fill: parent
         StatusBar {
+            statusText: backend.statusText
+            resolution: backend.resolution
+            fps: backend.fps
+            streaming: backend.streaming
+            bitrateKbps: backend.bitrateKbps
+            cpuPercent: backend.cpuPercent
+            lastError: backend.lastError
             Layout.fillWidth: true
         }
         CameraView {
+            id: camera
+            profile: settings.selectedProfile
             Layout.fillWidth: true
             Layout.fillHeight: true
         }
         Settings {
+            id: settings
+            onStartChanged:
+            {
+                if (settings.start && settings.selectedProfile)
+                {
+                    backend.play(settings.selectedProfile)
+                    camera.start = true
+                }
+            }
+            profiles: backend.profiles
             Layout.fillWidth: true
         }
     }
-    Timer {
-        id: timer
-        interval: 5000
-        repeat: true
-        triggeredOnStart: true
-        onTriggered: backend.refresh()
+
+    CameraBackend {
+        id: backend
     }
 }

@@ -1,12 +1,19 @@
 #include "CameraBackend.hpp"
 #include "Protocol.hpp"
 #include <QNetworkReply>
+#include <qcontainerfwd.h>
 #include <qjsondocument.h>
+#include <qlogging.h>
+#include <qmutex.h>
 #include <qnetworkrequest.h>
 #include <qurl.h>
 
-CameraBackend::CameraBackend(QObject *parent)
+CameraBackend::CameraBackend(QObject *parent) : QObject(parent)
 {
+    m_timer.setInterval(5000);
+    connect(&m_timer, &QTimer::timeout, this, &CameraBackend::refresh);
+    refresh();
+    m_timer.start();
 }
 
 CameraBackend::~CameraBackend()
@@ -14,6 +21,7 @@ CameraBackend::~CameraBackend()
 }
 QString CameraBackend::statusText() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
     for (const auto &item : m_profiles)
     {
         const QVariantMap &profile = item.toMap();
@@ -26,18 +34,20 @@ QString CameraBackend::statusText() const
 }
 QString CameraBackend::resolution() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
     for (const auto &item : m_profiles)
     {
         const QVariantMap &profile = item.toMap();
         if (profile["name"].toString() == m_selectedProfile)
         {
-            return profile["width"].toString() + "x" + profile["height"].toString();
+            return profile["width"].toString() + QString::fromLatin1("x") + profile["height"].toString();
         }
     }
     return proto::kStateError;
 }
 int CameraBackend::fps() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
     for (const auto &item : m_profiles)
     {
         const QVariantMap &profile = item.toMap();
@@ -50,11 +60,14 @@ int CameraBackend::fps() const
 }
 bool CameraBackend::streaming() const
 {
+
+    QMutexLocker<QMutex> lock(&m_mutex);
     return m_streaming;
 }
 
 double CameraBackend::bitrateKbps() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
     for (const auto &item : m_profiles)
     {
         const QVariantMap &profile = item.toMap();
@@ -67,6 +80,8 @@ double CameraBackend::bitrateKbps() const
 }
 double CameraBackend::cpuPercent() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
+
     for (const auto &item : m_profiles)
     {
         const QVariantMap &profile = item.toMap();
@@ -79,6 +94,8 @@ double CameraBackend::cpuPercent() const
 }
 QString CameraBackend::lastError() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
+
     return m_lastError;
 }
 
@@ -91,12 +108,27 @@ bool CameraBackend::applySnapshot(const QByteArray &json)
         emit errorOccurred();
         return false;
     }
-    m_profiles = doc.toVariant().toMap()["profiles"].toList();
+    if (!doc.toVariant().toMap().contains("profiles"))
+    {
+        m_lastError = "Json does not have key profiles";
+        emit errorOccurred();
+        return false;
+    }
+
+    QVariantList newProfiles = doc.toVariant().toMap()["profiles"].toList();
+    if (newProfiles != m_profiles)
+    {
+        m_profiles = newProfiles;
+        emit profilesChanged();
+    }
     return true;
 }
 void CameraBackend::refresh()
 {
-    const QUrl url(QStringLiteral("http://localhost:") + QString(proto::kControlPort) + QString(proto::kApiProfiles));
+    QMutexLocker<QMutex> lock(&m_mutex);
+
+    const QUrl url(QStringLiteral("http://localhost:") + QString::number(proto::kControlPort) +
+                   QString::fromLatin1(proto::kApiProfiles));
     QNetworkReply *reply = m_network.get(QNetworkRequest(url));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -114,6 +146,8 @@ void CameraBackend::refresh()
 }
 void CameraBackend::play(const QString &profileName)
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
+
     if (profileName.isEmpty())
     {
         m_lastError = "No profile name provided";
@@ -128,9 +162,9 @@ void CameraBackend::play(const QString &profileName)
         {
             m_streaming = true;
             m_selectedProfile = profileName;
-            const QUrl url(QStringLiteral("http://localhost:") + QString(proto::kControlPort) +
-                           QString(proto::kApiProfiles) + QStringLiteral("/") + profileName +
-                           QString(proto::kActionOn));
+            const QUrl url(QStringLiteral("http://localhost:") + QString::number(proto::kControlPort) +
+                           QString::fromLatin1(proto::kApiProfiles) + QStringLiteral("/") + profileName +
+                           QString::fromLatin1(proto::kActionOn));
             QNetworkReply *reply = m_network.post(QNetworkRequest(url), nullptr);
             connect(reply, &QNetworkReply::finished, this, [this, reply]() {
                 if (reply->error() != QNetworkReply::NoError)
@@ -151,14 +185,17 @@ void CameraBackend::play(const QString &profileName)
 }
 void CameraBackend::stop()
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
+
     if (m_selectedProfile.isEmpty())
     {
         return;
     }
 
     m_streaming = false;
-    const QUrl url(QStringLiteral("http://localhost:") + QString(proto::kControlPort) + QString(proto::kApiProfiles) +
-                   QStringLiteral("/") + m_selectedProfile + QString(proto::kActionOff));
+    const QUrl url(QStringLiteral("http://localhost:") + QString::number(proto::kControlPort) +
+                   QString::fromLatin1(proto::kApiProfiles) + QStringLiteral("/") + m_selectedProfile +
+                   QString::fromLatin1(proto::kActionOff));
     QNetworkReply *reply = m_network.post(QNetworkRequest(url), nullptr);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() != QNetworkReply::NoError)
@@ -175,5 +212,7 @@ void CameraBackend::stop()
 }
 QVariantList CameraBackend::profiles() const
 {
+    QMutexLocker<QMutex> lock(&m_mutex);
+
     return m_profiles;
 }
